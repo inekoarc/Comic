@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1280">
+  <rect width="900" height="1280" fill="#f4f1e8"/>
+  <rect x="42" y="42" width="816" height="360" fill="#162033"/>
+  <circle cx="730" cy="110" r="58" fill="#ffd166"/>
+  <path d="M80 330h740v72H80z" fill="#0b1320"/>
+  <path d="M160 260h120v120H160zM340 210h150v170H340zM560 240h110v140H560z" fill="#26384d"/>
+  <text x="74" y="482" font-family="Microsoft YaHei, sans-serif" font-size="38" font-weight="800" fill="#111">漂浮都市的第七层，夜航线准点关闭。</text>
+  <rect x="42" y="540" width="388" height="300" fill="#d4334b"/>
+  <path d="M120 788c18-112 132-176 226-68" stroke="#fff4df" stroke-width="28" fill="none"/>
+  <rect x="470" y="540" width="388" height="300" fill="#0f8f88"/>
+  <path d="M560 620h210v140H560z" fill="#fff4df"/>
+  <path d="M560 620l105 82 105-82" stroke="#0b1320" stroke-width="14" fill="none"/>
+  <rect x="42" y="898" width="816" height="330" fill="#111827"/>
+  <path d="M184 1170c30-156 196-182 276-52 62-86 176-72 238 10" stroke="#8be9df" stroke-width="24" fill="none"/>
+  <text x="86" y="970" font-family="Microsoft YaHei, sans-serif" font-size="34" font-weight="800" fill="#fff4df">“这封信，没有目的地。”</text>
+</svg>

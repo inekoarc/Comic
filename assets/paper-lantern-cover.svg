@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 960">
+  <rect width="720" height="960" fill="#18151b"/>
+  <path d="M0 620c140-48 210-46 352-10s250 40 368-14v364H0z" fill="#27212a"/>
+  <g fill="#ffcf70">
+    <ellipse cx="160" cy="260" rx="58" ry="82"/><ellipse cx="360" cy="194" rx="72" ry="104"/><ellipse cx="568" cy="296" rx="54" ry="78"/>
+  </g>
+  <g stroke="#713b30" stroke-width="9" fill="none">
+    <path d="M102 260h116M288 194h144M514 296h108"/>
+    <path d="M160 178v164M360 90v208M568 218v156"/>
+  </g>
+  <path d="M272 512h176l34 228H238z" fill="#0e0c12"/>
+  <path d="M324 512c-18-64 52-102 80-36 18 42-16 74-80 36Z" fill="#f5e6cb"/>
+  <text x="72" y="820" fill="#fff1d6" font-family="Microsoft YaHei, sans-serif" font-size="84" font-weight="900">纸灯街</text>
+  <text x="78" y="876" fill="#ffcf70" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700">MIDNIGHT CASEBOOK</text>
+</svg>

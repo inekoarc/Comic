@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 960">
+  <rect width="720" height="960" fill="#86c7d6"/>
+  <circle cx="568" cy="130" r="72" fill="#ffe4a3"/>
+  <path d="M0 510c142 36 248 30 360-4s214-54 360 8v446H0z" fill="#126b77"/>
+  <path d="M0 590c122-28 220-20 360 16 140 36 248 28 360-18v372H0z" fill="#f2d796"/>
+  <path d="M180 344h290l58 228H122z" fill="#f7f4e8"/>
+  <path d="M218 260h220l32 84H182z" fill="#df695a"/>
+  <rect x="258" y="410" width="86" height="120" fill="#2e6f89"/>
+  <rect x="374" y="410" width="76" height="70" fill="#f7c45f"/>
+  <text x="70" y="812" fill="#17314c" font-family="Microsoft YaHei, sans-serif" font-size="84" font-weight="900">盐风纪事</text>
+  <text x="76" y="868" fill="#0f8f88" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700">LETTERS FROM THE TIDE</text>
+</svg>

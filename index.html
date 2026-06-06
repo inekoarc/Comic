@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>本地漫画站</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="#home" aria-label="本地漫画站首页">
+          <span class="brand-mark">漫</span>
+          <span class="brand-text">本地漫画站</span>
+        </a>
+
+        <form class="header-search" id="headerSearch">
+          <input id="searchInput" type="search" placeholder="搜索漫画名、标签">
+          <button type="submit">搜索</button>
+        </form>
+
+        <button class="icon-button" id="themeToggle" type="button" aria-label="切换主题" title="切换主题">◐</button>
+        <button class="settings-button" id="settingsToggle" type="button">设置</button>
+      </div>
+
+      <nav class="main-nav" aria-label="主导航">
+        <a href="#home" data-view-link="home">首页</a>
+        <a href="#library" data-view-link="library">漫画库</a>
+        <a href="#ranking" data-view-link="ranking">排行榜</a>
+        <a href="#categories" data-view-link="categories">分类</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="library-config" id="libraryConfig" hidden>
+        <form class="path-form" id="pathForm">
+          <label>
+            <span>漫画根目录</span>
+            <input id="libraryPath" type="text" placeholder="例如：D:\Comics">
+          </label>
+          <button class="primary-button" type="submit">扫描目录</button>
+        </form>
+        <p class="status-line" id="statusLine">正在连接本地服务...</p>
+      </section>
+
+      <section class="page-view active" id="homeView">
+        <div class="portal-layout">
+          <section class="portal-main">
+            <div class="section-title">
+              <h1>最新收录</h1>
+              <a href="#library">更多</a>
+            </div>
+            <div class="update-list" id="latestList"></div>
+          </section>
+
+          <aside class="portal-side">
+            <div class="side-block">
+              <div class="section-title">
+                <h2>排行榜</h2>
+                <a href="#ranking">完整榜单</a>
+              </div>
+              <ol class="compact-ranking" id="homeRanking"></ol>
+            </div>
+
+            <div class="side-block">
+              <div class="section-title">
+                <h2>标签分类</h2>
+                <a href="#categories">全部</a>
+              </div>
+              <div class="tag-cloud" id="homeTags"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="page-view" id="libraryView">
+        <div class="section-title">
+          <h1>漫画库</h1>
+          <span id="resultCount">0 本漫画</span>
+        </div>
+        <div class="filter-bar" id="tagFilters"></div>
+        <div class="directory-grid" id="comicGrid"></div>
+        <nav class="library-pager" id="libraryPager" aria-label="漫画库分页"></nav>
+      </section>
+
+      <section class="page-view" id="rankingView">
+        <div class="section-title">
+          <h1>排行榜</h1>
+          <div class="ranking-tabs" id="rankingTabs">
+            <button type="button" class="active" data-ranking-mode="rating">按评分</button>
+            <button type="button" data-ranking-mode="views">按观看次数</button>
+          </div>
+        </div>
+        <ol class="ranking-list" id="rankingList"></ol>
+      </section>
+
+      <section class="page-view" id="categoriesView">
+        <div class="section-title">
+          <h1>分类</h1>
+          <span>标签来自每本漫画详情页</span>
+        </div>
+        <div class="category-board" id="categoryBoard"></div>
+      </section>
+
+      <section class="page-view" id="detailView">
+        <div class="detail-layout" id="comicDetail"></div>
+      </section>
+
+      <section class="page-view" id="readerView">
+        <div class="slide-reader" id="slideReader">
+          <div class="reader-topbar" id="readerTopbar">
+            <a class="reader-pill" href="#detail">‹ 返回</a>
+            <div class="reader-spacer"></div>
+            <button class="reader-pill" id="autoToggle" type="button">自动：关</button>
+            <div class="auto-popover" id="autoPopover" hidden>
+              <input id="autoInterval" class="auto-slider" type="range" min="1" max="30" value="10">
+            </div>
+            <button class="reader-pill reader-icon" id="readerThemeToggle" type="button" aria-label="切换日夜">☀</button>
+            <label class="reader-pill reader-width" id="widthControl">
+              <span>宽度</span>
+              <input id="imageWidth" type="range" min="40" max="100" value="100">
+            </label>
+            <div class="reader-mode-group" role="group" aria-label="阅读模式">
+              <button type="button" data-reader-mode="scroll">下拉</button>
+              <button type="button" data-reader-mode="single">单页</button>
+            </div>
+          </div>
+          <div class="reader-stage" id="readerStage">
+            <p class="empty-state">从漫画库选择一本漫画开始阅读。</p>
+          </div>
+          <div class="reader-page-badge" id="progressLabel">0 / 0</div>
+          <div class="reader-progress" aria-label="阅读进度">
+            <div><i id="progressBar"></i></div>
+          </div>
+          <select id="pageSelect" class="reader-hidden-select" aria-label="选择页码"></select>
+          <select id="readingMode" class="reader-hidden-select" aria-label="阅读模式">
+            <option value="scroll">下拉</option>
+            <option value="single">单页</option>
+          </select>
+          <input id="brightness" class="reader-hidden-select" type="range" min="70" max="115" value="100">
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

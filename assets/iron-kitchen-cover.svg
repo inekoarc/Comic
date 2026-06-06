@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 960">
+  <rect width="720" height="960" fill="#251713"/>
+  <path d="M0 280c160 52 260-70 382-26s188 76 338 22v684H0z" fill="#6a2d22"/>
+  <circle cx="360" cy="484" r="210" fill="#111" stroke="#f2b84b" stroke-width="18"/>
+  <path d="M214 486c84-84 204-84 292 0-70 76-198 78-292 0Z" fill="#d4334b"/>
+  <path d="M314 342c-40-82 80-88 50-176 94 76-10 120 42 190Z" fill="#f5d769"/>
+  <path d="M456 420h160" stroke="#111" stroke-width="34" stroke-linecap="round"/>
+  <text x="54" y="812" fill="#fff4d6" font-family="Microsoft YaHei, sans-serif" font-size="76" font-weight="900">铁锅群侠传</text>
+  <text x="60" y="868" fill="#f2b84b" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700">WOK FIGHTERS</text>
+</svg>
