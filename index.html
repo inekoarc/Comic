@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>本地漫画站</title>
+    <title>漫画管理器</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <header class="site-header">
       <div class="header-inner">
-        <a class="brand" href="#home" aria-label="本地漫画站首页">
+        <a class="brand" href="#home" aria-label="漫画管理器首页">
           <span class="brand-mark">漫</span>
-          <span class="brand-text">本地漫画站</span>
+          <span class="brand-text">漫画管理器</span>
         </a>
 
         <form class="header-search" id="headerSearch">
@@ -19,7 +19,7 @@
           <button type="submit">搜索</button>
         </form>
 
-        <button class="icon-button" id="themeToggle" type="button" aria-label="切换主题" title="切换主题">◐</button>
+        <button class="icon-button" id="themeToggle" type="button" aria-label="切换主题" title="切换主题">☀</button>
         <button class="settings-button" id="settingsToggle" type="button">设置</button>
       </div>
 
@@ -38,8 +38,10 @@
             <span>漫画根目录</span>
             <input id="libraryPath" type="text" placeholder="例如：D:\Comics">
           </label>
-          <button class="primary-button" type="submit">扫描目录</button>
+          <button class="primary-button" type="submit">添加目录</button>
+          <button class="secondary-button" id="syncLibraryButton" type="button">同步刷新</button>
         </form>
+        <div class="root-list" id="rootList"></div>
         <p class="status-line" id="statusLine">正在连接本地服务...</p>
       </section>
 
@@ -116,6 +118,7 @@
               <input id="autoInterval" class="auto-slider" type="range" min="1" max="30" value="10">
             </div>
             <button class="reader-pill reader-icon" id="readerThemeToggle" type="button" aria-label="切换日夜">☀</button>
+            <button class="reader-pill" id="fitToggle" type="button">自适应</button>
             <label class="reader-pill reader-width" id="widthControl">
               <span>宽度</span>
               <input id="imageWidth" type="range" min="40" max="100" value="100">

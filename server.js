@@ -3,6 +3,7 @@ const fs = require("node:fs/promises");
 const http = require("node:http");
 const path = require("node:path");
 const { createReadStream } = require("node:fs");
+const { execFile } = require("node:child_process");
 
 const PORT = Number(process.env.PORT || 9000);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -10,6 +11,9 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "data");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const META_FILE = path.join(DATA_DIR, "metadata.json");
+const INDEX_FILE = path.join(DATA_DIR, "library-index.json");
+const THUMB_DIR = path.join(DATA_DIR, "thumbs");
+const INDEX_VERSION = 4;
 
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif"]);
 const mimeTypes = {
@@ -26,6 +30,9 @@ const mimeTypes = {
   ".bmp": "image/bmp",
   ".avif": "image/avif"
 };
+
+let indexCache = null;
+let scanPromise = null;
 
 async function ensureDataDir() {
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -44,12 +51,82 @@ async function writeJson(file, value) {
   await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function normalizeRoot(root) {
+  return path.resolve(String(root || "").trim());
+}
+
+function normalizeRoots(value) {
+  const roots = Array.isArray(value) ? value : [value].filter(Boolean);
+  return [...new Set(roots.map(normalizeRoot).filter(Boolean))];
+}
+
 async function getConfig() {
-  return readJson(CONFIG_FILE, { libraryRoot: "" });
+  const config = await readJson(CONFIG_FILE, { libraryRoots: [] });
+  const libraryRoots = normalizeRoots(config.libraryRoots?.length ? config.libraryRoots : config.libraryRoot);
+  return { libraryRoots, libraryRoot: libraryRoots[0] || "" };
+}
+
+async function saveConfig(libraryRoots) {
+  await writeJson(CONFIG_FILE, { libraryRoots, libraryRoot: libraryRoots[0] || "" });
 }
 
 async function getMetadata() {
   return readJson(META_FILE, {});
+}
+
+function decodeHtmlEntities(value) {
+  const named = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: " "
+  };
+  return String(value).replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, entity) => {
+    if (entity[0] === "#") {
+      const hex = entity[1]?.toLowerCase() === "x";
+      const code = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+    }
+    return named[entity.toLowerCase()] ?? match;
+  });
+}
+
+function introDescriptionFromHtml(intro) {
+  if (typeof intro !== "string" || !intro.trim()) return "";
+  const plainText = decodeHtmlEntities(intro
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:p|div|li|tr|h[1-6])\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, ""))
+    .replace(/\r\n?/g, "\n");
+  const marker = plainText.match(/(?:簡介|简介)\s*[：:]\s*/u);
+  if (!marker) return "";
+  return plainText
+    .slice((marker.index || 0) + marker[0].length)
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function readComicMetadata(dir, entries = []) {
+  const metadataEntry = entries.find((entry) => entry.isFile() && entry.name.toLowerCase() === "元数据.json");
+  if (!metadataEntry) return { tags: [], description: "" };
+  try {
+    const text = (await fs.readFile(path.join(dir, metadataEntry.name), "utf8")).replace(/^\uFEFF/, "");
+    const value = JSON.parse(text);
+    const tags = Array.isArray(value?.tags) ? [...new Set(value.tags
+      .map((tag) => typeof tag?.name === "string" ? tag.name.trim() : "")
+      .filter(Boolean))] : [];
+    return { tags, description: introDescriptionFromHtml(value?.intro) };
+  } catch (error) {
+    console.warn(`Failed to read comic metadata: ${path.join(dir, metadataEntry.name)} (${error.message})`);
+    return { tags: [], description: "" };
+  }
 }
 
 function sendJson(res, status, value) {
@@ -68,10 +145,6 @@ async function readRequestBody(req) {
   return text ? JSON.parse(text) : {};
 }
 
-function normalizeRoot(root) {
-  return path.resolve(String(root || "").trim());
-}
-
 function isInside(base, target) {
   const resolvedBase = path.resolve(base);
   const resolvedTarget = path.resolve(target);
@@ -86,144 +159,557 @@ function naturalSort(a, b) {
   return a.localeCompare(b, "zh-CN", { numeric: true, sensitivity: "base" });
 }
 
-function idFor(relativeDir) {
-  return crypto.createHash("sha1").update(relativeDir).digest("hex").slice(0, 16);
+function idFor(value) {
+  return crypto.createHash("sha1").update(value).digest("hex").slice(0, 16);
 }
 
-async function collectImages(dir, root, output = []) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  for (const entry of entries.sort((a, b) => naturalSort(a.name, b.name))) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      await collectImages(fullPath, root, output);
-    } else if (entry.isFile() && isImage(fullPath)) {
-      output.push(path.relative(root, fullPath));
-    }
-  }
-  return output;
+function rootIdFor(root) {
+  return idFor(path.resolve(root).toLowerCase());
 }
 
-async function scanLibrary(root) {
-  const stat = await fs.stat(root);
-  if (!stat.isDirectory()) throw new Error("Library path is not a directory");
+function pageUrl(rootId, file) {
+  return `/api/image?root=${encodeURIComponent(rootId)}&file=${encodeURIComponent(file)}`;
+}
 
-  const entries = await fs.readdir(root, { withFileTypes: true });
-  const categoryFolders = entries.filter((entry) => entry.isDirectory()).sort((a, b) => naturalSort(a.name, b.name));
-  const rootImages = entries
-    .filter((entry) => entry.isFile() && isImage(entry.name))
-    .map((entry) => entry.name)
-    .sort(naturalSort);
+function thumbUrl(rootId, file, width = 360) {
+  return `/api/thumb?root=${encodeURIComponent(rootId)}&file=${encodeURIComponent(file)}&w=${width}`;
+}
 
-  const comics = [];
+function thumbUrlFromImageUrl(imageUrl, width = 360) {
+  try {
+    const url = new URL(imageUrl, "http://local");
+    if (url.pathname !== "/api/image") return imageUrl;
+    url.pathname = "/api/thumb";
+    url.searchParams.set("w", String(width));
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return imageUrl;
+  }
+}
 
-  if (rootImages.length) {
-    comics.push(buildComic(".", "根目录漫画", rootImages, "未分类"));
+function publicComic(comic) {
+  const dirMtimeMs = Number(comic.dirMtimeMs) || 0;
+  return {
+    id: comic.id,
+    title: comic.title,
+    category: comic.category,
+    relativeDir: comic.relativeDir,
+    pageCount: comic.pageCount,
+    source: comic.source,
+    cover: comic.cover,
+    coverThumb: comic.coverThumb || thumbUrlFromImageUrl(comic.cover),
+    updatedAt: comic.updatedAt || (dirMtimeMs ? new Date(dirMtimeMs).toISOString() : ""),
+    rootId: comic.rootId,
+    rootName: comic.rootName,
+    rootPath: comic.rootPath
+  };
+}
+
+function selectDirectory(initialDir = "") {
+  if (process.platform !== "win32") {
+    throw new Error("Directory picker is only available on Windows in this local build");
   }
 
-  for (const category of categoryFolders) {
-    const categoryPath = path.join(root, category.name);
-    const categoryEntries = await fs.readdir(categoryPath, { withFileTypes: true });
-    const directImages = categoryEntries
-      .filter((entry) => entry.isFile() && isImage(entry.name))
-      .map((entry) => path.join(category.name, entry.name))
-      .sort(naturalSort);
-    const comicFolders = categoryEntries
-      .filter((entry) => entry.isDirectory())
-      .sort((a, b) => naturalSort(a.name, b.name));
+  const script = [
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+    "$OutputEncoding = [System.Text.Encoding]::UTF8",
+    "$initial = $env:COMIC_INITIAL_DIR",
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog",
+    "$dialog.Description = '选择漫画根目录'",
+    "$dialog.ShowNewFolderButton = $true",
+    "if ($initial -and [System.IO.Directory]::Exists($initial)) { $dialog.SelectedPath = $initial }",
+    "$result = $dialog.ShowDialog()",
+    "if ($result -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }"
+  ].join("; ");
 
-    if (directImages.length) {
-      comics.push(buildComic(category.name, category.name, directImages, category.name));
-    }
-
-    for (const comicFolder of comicFolders) {
-      const relativeDir = path.join(category.name, comicFolder.name);
-      const images = await collectImages(path.join(root, relativeDir), root);
-      if (images.length) {
-        comics.push(buildComic(relativeDir, comicFolder.name, images.sort(naturalSort), category.name));
+  return new Promise((resolve, reject) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-STA", "-Command", script],
+      {
+        windowsHide: false,
+        timeout: 600000,
+        env: { ...process.env, COMIC_INITIAL_DIR: initialDir }
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr.trim() || error.message));
+          return;
+        }
+        resolve(stdout.trim());
       }
-    }
-  }
-
-  return comics;
+    );
+  });
 }
 
-function buildComic(relativeDir, title, images, category) {
-  const id = idFor(relativeDir);
-  const pages = images.map((file) => `/api/image?file=${encodeURIComponent(file)}`);
+function categoryForRelativeDir(relativeDir) {
+  if (relativeDir === ".") return "未分类";
+  const parts = relativeDir.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= 1) return parts[0] || "未分类";
+  return parts.slice(0, -1).join(" / ");
+}
+
+function titleForRelativeDir(relativeDir) {
+  if (relativeDir === ".") return "根目录漫画";
+  const parts = relativeDir.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) || relativeDir;
+}
+
+function buildComic({ root, rootId, rootName, relativeDir, title, images, category, dirMtimeMs, initialTags = [], initialDescription = "" }) {
+  const id = idFor(`${rootId}:${relativeDir}`);
+  const pages = images.map((file) => pageUrl(rootId, file));
+  const coverThumb = images[0] ? thumbUrl(rootId, images[0]) : pages[0];
   return {
     id,
     title,
     category,
     relativeDir,
     pageCount: pages.length,
-    source: `${category} · ${pages.length} 张图片`,
+    source: `${category} · ${pages.length}P`,
     cover: pages[0],
-    pages
+    coverThumb,
+    pages,
+    initialTags,
+    initialDescription,
+    dirMtimeMs,
+    updatedAt: dirMtimeMs ? new Date(dirMtimeMs).toISOString() : "",
+    rootId,
+    rootName,
+    rootPath: root
   };
+}
+
+async function buildOrReuseComic({ root, rootId, rootName, relativeDir, title, category, dirPath, directImages, initialTags, initialDescription, previousByKey }) {
+  const stat = await fs.stat(dirPath);
+  const cacheKey = `${rootId}:${relativeDir}`;
+  const previous = previousByKey.get(cacheKey);
+  if (previous && Number(previous.dirMtimeMs) === Number(stat.mtimeMs) && previous.pages?.length) {
+    return { ...previous, initialTags, initialDescription };
+  }
+
+  const images = directImages || [];
+  if (!images.length) return null;
+  return buildComic({
+    root,
+    rootId,
+    rootName,
+    relativeDir,
+    title,
+    images: images.sort(naturalSort),
+    category,
+    dirMtimeMs: stat.mtimeMs,
+    initialTags,
+    initialDescription
+  });
+}
+
+async function scanComicDirectories(root, rootId, rootName, dir, previousByKey, comics) {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const fileMetadata = await readComicMetadata(dir, entries);
+  const directImages = entries
+    .filter((entry) => entry.isFile() && isImage(entry.name))
+    .map((entry) => path.relative(root, path.join(dir, entry.name)))
+    .sort(naturalSort);
+  const relativeDir = path.relative(root, dir) || ".";
+
+  if (directImages.length) {
+    const comic = await buildOrReuseComic({
+      root,
+      rootId,
+      rootName,
+      relativeDir,
+      title: titleForRelativeDir(relativeDir),
+      category: categoryForRelativeDir(relativeDir),
+      dirPath: dir,
+      directImages,
+      initialTags: fileMetadata.tags,
+      initialDescription: fileMetadata.description,
+      previousByKey
+    });
+    if (comic) comics.push(comic);
+  }
+
+  const folders = entries
+    .filter((entry) => entry.isDirectory())
+    .sort((a, b) => naturalSort(a.name, b.name));
+
+  for (const folder of folders) {
+    await scanComicDirectories(root, rootId, rootName, path.join(dir, folder.name), previousByKey, comics);
+  }
+}
+
+async function scanLibrary(root, previousIndex = null) {
+  const stat = await fs.stat(root);
+  if (!stat.isDirectory()) throw new Error("Library path is not a directory");
+
+  const rootId = rootIdFor(root);
+  const rootName = path.basename(root) || root;
+  const previousByKey = new Map(
+    (previousIndex?.comics || [])
+      .filter((comic) => comic.rootId === rootId)
+      .map((comic) => [`${comic.rootId}:${comic.relativeDir}`, comic])
+  );
+  const comics = [];
+  await scanComicDirectories(root, rootId, rootName, root, previousByKey, comics);
+  return {
+    version: INDEX_VERSION,
+    libraryRoot: root,
+    libraryRoots: [root],
+    scannedAt: new Date().toISOString(),
+    comics
+  };
+}
+
+async function scanLibraries(libraryRoots, previousIndex = null) {
+  const comics = [];
+  for (const root of libraryRoots) {
+    const result = await scanLibrary(root, previousIndex);
+    comics.push(...result.comics);
+  }
+  return {
+    version: INDEX_VERSION,
+    libraryRoot: libraryRoots[0] || "",
+    libraryRoots,
+    scannedAt: new Date().toISOString(),
+    comics
+  };
+}
+
+async function loadIndex() {
+  if (indexCache) return indexCache;
+  const index = await readJson(INDEX_FILE, null);
+  if (index?.version === INDEX_VERSION && Array.isArray(index.comics)) {
+    indexCache = index;
+    return indexCache;
+  }
+  return null;
+}
+
+async function saveIndex(index) {
+  indexCache = index;
+  await writeJson(INDEX_FILE, index);
+}
+
+async function initializeMetadataFromFiles(comics) {
+  const metadata = await getMetadata();
+  let changed = false;
+
+  for (const comic of comics) {
+    const initialTags = Array.isArray(comic.initialTags) ? comic.initialTags : [];
+    const initialDescription = typeof comic.initialDescription === "string" ? comic.initialDescription.trim() : "";
+    if (!initialTags.length && !initialDescription) continue;
+    const current = metadata[comic.id] || {};
+    const next = {
+      rating: Math.max(0, Math.min(5, Number(current.rating) || 0)),
+      tags: Array.isArray(current.tags) ? current.tags : [],
+      views: Math.max(0, Math.floor(Number(current.views) || 0)),
+      description: typeof current.description === "string" ? current.description : "",
+      tagsInitializedFromFile: Boolean(current.tagsInitializedFromFile),
+      tagsInitializationVersion: Math.max(0, Math.floor(Number(current.tagsInitializationVersion) || 0)),
+      descriptionInitializedFromFile: Boolean(current.descriptionInitializedFromFile)
+    };
+
+    const shouldInitializeTags = initialTags.length && (
+      !next.tagsInitializedFromFile
+      || (!next.tags.length && next.tagsInitializationVersion < 2)
+    );
+    if (shouldInitializeTags) {
+      if (!next.tags.length) next.tags = initialTags;
+      next.tagsInitializedFromFile = true;
+      next.tagsInitializationVersion = 2;
+      changed = true;
+    }
+    if (initialDescription && !next.descriptionInitializedFromFile) {
+      if (!next.description.trim()) next.description = initialDescription;
+      next.descriptionInitializedFromFile = true;
+      changed = true;
+    }
+    metadata[comic.id] = next;
+  }
+
+  if (changed) await writeJson(META_FILE, metadata);
+}
+
+function rootsMatch(a = [], b = []) {
+  return a.length === b.length && a.every((root, index) => root === b[index]);
+}
+
+async function refreshIndex(libraryRoots) {
+  if (scanPromise) return scanPromise;
+  scanPromise = (async () => {
+    const previous = await loadIndex();
+    const nextIndex = await scanLibraries(libraryRoots, previous);
+    await initializeMetadataFromFiles(nextIndex.comics);
+    await saveIndex(nextIndex);
+    return nextIndex;
+  })().finally(() => {
+    scanPromise = null;
+  });
+  return scanPromise;
+}
+
+async function getLibraryIndex(libraryRoots, { refresh = false } = {}) {
+  const cached = await loadIndex();
+  const cacheMatches = cached && rootsMatch(cached.libraryRoots || [cached.libraryRoot].filter(Boolean), libraryRoots);
+  if (refresh || !cacheMatches) {
+    return refreshIndex(libraryRoots);
+  }
+  if (!scanPromise) {
+    refreshIndex(libraryRoots).catch((error) => console.error("Background scan failed:", error.message));
+  }
+  return cached;
+}
+
+async function findComic(libraryRoots, id) {
+  let index = await getLibraryIndex(libraryRoots);
+  let comic = index.comics.find((item) => item.id === id);
+  if (!comic) {
+    index = await getLibraryIndex(libraryRoots, { refresh: true });
+    comic = index.comics.find((item) => item.id === id);
+  }
+  return comic;
+}
+
+function findRootById(libraryRoots, rootId) {
+  return libraryRoots.find((root) => rootIdFor(root) === rootId);
+}
+
+async function resolveImageRequest(url) {
+  const { libraryRoots } = await getConfig();
+  const rootId = url.searchParams.get("root") || rootIdFor(libraryRoots[0] || "");
+  const relativeFile = url.searchParams.get("file");
+  const libraryRoot = findRootById(libraryRoots, rootId);
+  if (!libraryRoot || !relativeFile) {
+    const error = new Error("Missing image path");
+    error.status = 400;
+    throw error;
+  }
+
+  const filePath = path.resolve(libraryRoot, relativeFile);
+  if (!isInside(libraryRoot, filePath) || !isImage(filePath)) {
+    const error = new Error("Image path is outside the library root");
+    error.status = 403;
+    throw error;
+  }
+  await fs.access(filePath);
+  return { filePath };
+}
+
+async function generateThumbnail(filePath, width) {
+  const stat = await fs.stat(filePath);
+  const cacheKey = crypto
+    .createHash("sha1")
+    .update(`${filePath}:${stat.size}:${stat.mtimeMs}:${width}`)
+    .digest("hex");
+  const thumbPath = path.join(THUMB_DIR, `${cacheKey}.jpg`);
+  if (await fs.access(thumbPath).then(() => true).catch(() => false)) return thumbPath;
+
+  await fs.mkdir(THUMB_DIR, { recursive: true });
+  const script = [
+    "Add-Type -AssemblyName System.Drawing",
+    "$src = $env:COMIC_THUMB_SRC",
+    "$dest = $env:COMIC_THUMB_DEST",
+    "$max = [Math]::Max(120, [int]$env:COMIC_THUMB_WIDTH)",
+    "$img = $null; $bmp = $null; $g = $null; $params = $null",
+    "try {",
+    "  $img = [System.Drawing.Image]::FromFile($src)",
+    "  $scale = [Math]::Min($max / $img.Width, $max / $img.Height)",
+    "  if ($scale -gt 1) { $scale = 1 }",
+    "  $w = [Math]::Max(1, [int]($img.Width * $scale))",
+    "  $h = [Math]::Max(1, [int]($img.Height * $scale))",
+    "  $bmp = New-Object System.Drawing.Bitmap $w, $h",
+    "  $g = [System.Drawing.Graphics]::FromImage($bmp)",
+    "  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic",
+    "  $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality",
+    "  $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality",
+    "  $g.DrawImage($img, 0, 0, $w, $h)",
+    "  $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }",
+    "  $params = New-Object System.Drawing.Imaging.EncoderParameters 1",
+    "  $params.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), 82L",
+    "  $bmp.Save($dest, $codec, $params)",
+    "} finally {",
+    "  if ($params) { $params.Dispose() }",
+    "  if ($g) { $g.Dispose() }",
+    "  if ($bmp) { $bmp.Dispose() }",
+    "  if ($img) { $img.Dispose() }",
+    "}"
+  ].join("; ");
+
+  await new Promise((resolve, reject) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-Command", script],
+      {
+        windowsHide: true,
+        timeout: 60000,
+        env: {
+          ...process.env,
+          COMIC_THUMB_SRC: filePath,
+          COMIC_THUMB_DEST: thumbPath,
+          COMIC_THUMB_WIDTH: String(width)
+        }
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr.trim() || error.message));
+          return;
+        }
+        resolve(stdout);
+      }
+    );
+  });
+  return thumbPath;
 }
 
 async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/config") {
-    sendJson(res, 200, await getConfig());
+    const { libraryRoots, libraryRoot } = await getConfig();
+    sendJson(res, 200, { libraryRoots, libraryRoot });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/select-directory") {
+    const selectedPath = await selectDirectory(url.searchParams.get("initial") || "");
+    sendJson(res, 200, selectedPath ? { path: selectedPath, canceled: false } : { path: "", canceled: true });
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/config") {
     const body = await readRequestBody(req);
-    const libraryRoot = normalizeRoot(body.libraryRoot);
-    const stat = await fs.stat(libraryRoot).catch(() => null);
-    if (!stat?.isDirectory()) {
+    const current = await getConfig();
+    const hasRootsList = Object.prototype.hasOwnProperty.call(body, "libraryRoots");
+    const nextRoots = normalizeRoots(hasRootsList ? body.libraryRoots : [...current.libraryRoots, body.libraryRoot]);
+    if (!hasRootsList && !nextRoots.length) {
       sendError(res, 400, "Library folder was not found");
       return;
     }
-    await writeJson(CONFIG_FILE, { libraryRoot });
-    sendJson(res, 200, { libraryRoot });
+
+    for (const root of nextRoots) {
+      const stat = await fs.stat(root).catch(() => null);
+      if (!stat?.isDirectory()) {
+        sendError(res, 400, `Library folder was not found: ${root}`);
+        return;
+      }
+    }
+
+    await saveConfig(nextRoots);
+    if (nextRoots.length) {
+      refreshIndex(nextRoots).catch((error) => console.error("Background scan failed:", error.message));
+    } else {
+      await saveIndex({ version: INDEX_VERSION, libraryRoot: "", libraryRoots: [], scannedAt: new Date().toISOString(), comics: [] });
+    }
+    sendJson(res, 200, { libraryRoots: nextRoots, libraryRoot: nextRoots[0] || "" });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/sync") {
+    const { libraryRoots } = await getConfig();
+    if (!libraryRoots.length) {
+      sendJson(res, 200, { libraryRoots: [], comics: [], metadata: await getMetadata(), scanning: false });
+      return;
+    }
+    const index = await refreshIndex(libraryRoots);
+    sendJson(res, 200, {
+      libraryRoots,
+      libraryRoot: libraryRoots[0] || "",
+      comics: index.comics.map(publicComic),
+      metadata: await getMetadata(),
+      scannedAt: index.scannedAt,
+      scanning: Boolean(scanPromise)
+    });
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/api/library") {
-    const { libraryRoot } = await getConfig();
-    if (!libraryRoot) {
-      sendJson(res, 200, { libraryRoot: "", comics: [], metadata: await getMetadata() });
+    const { libraryRoots, libraryRoot } = await getConfig();
+    if (!libraryRoots.length) {
+      sendJson(res, 200, { libraryRoot: "", libraryRoots: [], comics: [], metadata: await getMetadata(), scanning: false });
       return;
     }
-    const comics = await scanLibrary(libraryRoot);
-    sendJson(res, 200, { libraryRoot, comics, metadata: await getMetadata() });
+    const refresh = url.searchParams.get("refresh") === "1";
+    const index = await getLibraryIndex(libraryRoots, { refresh });
+    sendJson(res, 200, {
+      libraryRoot,
+      libraryRoots,
+      comics: index.comics.map(publicComic),
+      metadata: await getMetadata(),
+      scannedAt: index.scannedAt,
+      scanning: Boolean(scanPromise)
+    });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/api/comics/")) {
+    const id = decodeURIComponent(url.pathname.split("/")[3] || "");
+    const { libraryRoots } = await getConfig();
+    if (!libraryRoots.length || !id) {
+      sendError(res, 400, "Missing comic id");
+      return;
+    }
+    const comic = await findComic(libraryRoots, id);
+    if (!comic) {
+      sendError(res, 404, "Comic was not found");
+      return;
+    }
+    sendJson(res, 200, comic);
     return;
   }
 
   if (req.method === "PUT" && url.pathname.startsWith("/api/comics/") && url.pathname.endsWith("/metadata")) {
     const id = decodeURIComponent(url.pathname.split("/")[3] || "");
     const body = await readRequestBody(req);
-    const rating = Math.max(0, Math.min(10, Number(body.rating) || 0));
+    const rating = Math.max(0, Math.min(5, Number(body.rating) || 0));
     const tags = Array.isArray(body.tags)
       ? [...new Set(body.tags.map((tag) => String(tag).trim()).filter(Boolean))]
       : [];
     const views = Math.max(0, Math.floor(Number(body.views) || 0));
+    const description = String(body.description || "").slice(0, 2000);
     const metadata = await getMetadata();
-    metadata[id] = { rating, tags, views };
+    const current = metadata[id] || {};
+    metadata[id] = {
+      rating,
+      tags,
+      views,
+      description,
+      tagsInitializedFromFile: Boolean(current.tagsInitializedFromFile),
+      tagsInitializationVersion: current.tagsInitializedFromFile
+        ? Math.max(2, Math.floor(Number(current.tagsInitializationVersion) || 0))
+        : 0,
+      descriptionInitializedFromFile: Boolean(current.descriptionInitializedFromFile)
+    };
     await writeJson(META_FILE, metadata);
     sendJson(res, 200, metadata[id]);
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/api/image") {
-    const { libraryRoot } = await getConfig();
-    const relativeFile = url.searchParams.get("file");
-    if (!libraryRoot || !relativeFile) {
-      sendError(res, 400, "Missing image path");
-      return;
-    }
-
-    const filePath = path.resolve(libraryRoot, relativeFile);
-    if (!isInside(libraryRoot, filePath) || !isImage(filePath)) {
-      sendError(res, 403, "Image path is outside the library root");
-      return;
-    }
-
-    await fs.access(filePath);
-    res.writeHead(200, { "content-type": mimeTypes[path.extname(filePath).toLowerCase()] || "application/octet-stream" });
+    const { filePath } = await resolveImageRequest(url);
+    res.writeHead(200, {
+      "content-type": mimeTypes[path.extname(filePath).toLowerCase()] || "application/octet-stream",
+      "cache-control": "public, max-age=31536000, immutable"
+    });
     createReadStream(filePath).pipe(res);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/thumb") {
+    const { filePath } = await resolveImageRequest(url);
+    const width = Math.max(120, Math.min(720, Number(url.searchParams.get("w")) || 360));
+    try {
+      const thumbPath = await generateThumbnail(filePath, width);
+      res.writeHead(200, {
+        "content-type": "image/jpeg",
+        "cache-control": "public, max-age=31536000, immutable"
+      });
+      createReadStream(thumbPath).pipe(res);
+    } catch {
+      res.writeHead(200, {
+        "content-type": mimeTypes[path.extname(filePath).toLowerCase()] || "application/octet-stream",
+        "cache-control": "public, max-age=31536000, immutable"
+      });
+      createReadStream(filePath).pipe(res);
+    }
     return;
   }
 
@@ -271,6 +757,7 @@ if (require.main === module) {
 
 module.exports = {
   scanLibrary,
+  scanLibraries,
   idFor,
   isInside,
   server
