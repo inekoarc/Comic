@@ -416,6 +416,90 @@ input[type="range"] {
   background: var(--accent);
 }
 
+.global-sync-progress {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 30;
+  display: grid;
+  width: min(430px, calc(100vw - 28px));
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid rgba(191, 31, 52, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 251, 248, 0.94);
+  box-shadow: 0 14px 34px rgba(112, 82, 72, 0.2);
+  backdrop-filter: blur(12px);
+}
+
+.global-sync-progress[hidden] {
+  display: none;
+}
+
+.global-sync-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.global-sync-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-sync-copy span {
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.global-sync-progress p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-sync-progress progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(112, 82, 72, 0.12);
+  accent-color: var(--accent);
+}
+
+.global-sync-progress progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: rgba(112, 82, 72, 0.12);
+}
+
+.global-sync-progress progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: linear-gradient(90deg, #bf1f34, #e26373);
+  transition: width 180ms ease;
+}
+
+.global-sync-progress progress::-moz-progress-bar {
+  border-radius: 999px;
+  background: #bf1f34;
+}
+
+body.dark .global-sync-progress {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(38, 31, 29, 0.94);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
+}
+
 .root-list {
   display: grid;
   gap: 8px;
@@ -987,6 +1071,46 @@ input[type="range"] {
   transform: scale(1.025);
 }
 
+.category-random-card {
+  border-color: rgba(191, 31, 52, 0.5);
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.category-random-card > img {
+  filter: saturate(0.82) contrast(1.08);
+}
+
+.category-random-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(145deg, rgba(191, 31, 52, 0.42), transparent 58%);
+  pointer-events: none;
+}
+
+.category-random-mark {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 6px;
+  background: rgba(191, 31, 52, 0.86);
+  color: #fff;
+  font-size: 1.2rem;
+  font-weight: 900;
+  line-height: 1;
+  backdrop-filter: blur(8px);
+}
+
 .category-cover-shade {
   position: absolute;
   inset: 36% 0 0;
@@ -1473,6 +1597,17 @@ body.dark .detail-title-bar {
   line-height: 30px;
 }
 
+.category-action-row {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-move-button {
+  min-height: 30px;
+  padding: 4px 14px;
+  line-height: 1;
+}
+
 body.dark .plain-meta dt {
   color: var(--muted);
 }
@@ -1919,6 +2054,28 @@ body.dark .page-thumb h3 {
   color: #fff;
 }
 
+.reader-delete-page-button {
+  border-color: rgba(255, 190, 105, 0.35);
+  color: #ffd59e;
+}
+
+.reader-delete-page-button:hover {
+  border-color: #f2a93b;
+  background: #8a4d0d;
+  color: #fff;
+}
+
+.reader-move-button {
+  border-color: rgba(92, 177, 139, 0.42);
+  color: #d9f5e6;
+}
+
+.reader-move-button:hover {
+  border-color: rgba(92, 177, 139, 0.72);
+  background: rgba(39, 132, 93, 0.42);
+  color: #fff;
+}
+
 .reader-pill.active {
   border-color: rgba(255, 255, 255, 0.22);
   background: #263943;
@@ -2064,20 +2221,44 @@ body.dark .page-thumb h3 {
 .reader-page-badge {
   position: fixed;
   right: 16px;
-  bottom: 14px;
-  z-index: 4;
-  min-width: 52px;
-  min-height: 28px;
-  border-radius: 6px;
-  background: rgba(36, 45, 50, 0.82);
-  color: #fff;
+  top: 14px;
+  z-index: 8;
   display: grid;
-  place-items: center;
+  width: 72px;
+  min-height: 28px;
+  align-content: center;
+  gap: 4px;
+  border-radius: 5px;
+  background: rgba(36, 45, 50, 0.68);
+  color: #fff;
+  padding: 5px 7px;
   font-weight: 800;
   pointer-events: none;
-  opacity: 0;
-  transform: translateY(8px);
-  transition: opacity 160ms ease, transform 160ms ease;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.14);
+  transition: top 160ms ease;
+  backdrop-filter: blur(8px);
+}
+
+.reader-page-badge span {
+  font-size: 0.66rem;
+  line-height: 1;
+  text-align: right;
+}
+
+.reader-page-badge > div {
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.reader-page-badge i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: #ff5266;
+  transition: width 140ms ease;
 }
 
 .reader-complete-toast {
@@ -2168,6 +2349,40 @@ body.dark .page-thumb h3 {
   line-height: 1.5;
 }
 
+.reader-move-field {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 18px;
+  color: #705248;
+  font-weight: 800;
+}
+
+.reader-move-field select {
+  min-height: 40px;
+  border: 1px solid #e6d7cf;
+  border-radius: 6px;
+  background: #fffaf6;
+  color: #261f1d;
+  font: inherit;
+  padding: 0 10px;
+}
+
+.reader-move-status {
+  min-height: 1.5em;
+  margin: -6px 0 16px;
+  color: #27845d;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.reader-move-status:empty {
+  display: none;
+}
+
+.reader-move-status[data-tone="error"] {
+  color: #bf1f34;
+}
+
 .reader-delete-dialog > div {
   display: flex;
   justify-content: flex-end;
@@ -2198,9 +2413,19 @@ body.dark .page-thumb h3 {
   opacity: 0.6;
 }
 
+.reader-move-confirm {
+  border: 1px solid #20734f;
+  background: #27845d;
+  color: #fff;
+}
+
+.reader-move-confirm:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .slide-reader.controls-open .reader-page-badge {
-  opacity: 1;
-  transform: translateY(0);
+  top: 66px;
 }
 
 .reader-progress {
@@ -2417,6 +2642,13 @@ body.dark .page-thumb h3 {
 }
 
 @media (max-width: 560px) {
+  .global-sync-progress {
+    right: 10px;
+    bottom: 10px;
+    width: calc(100vw - 20px);
+    padding: 9px 10px;
+  }
+
   main,
   .header-inner {
     width: min(100% - 16px, 1180px);

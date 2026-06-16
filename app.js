@@ -96,12 +96,17 @@ const elements = {
   syncProgressValue: $("#syncProgressValue"),
   syncProgressBar: $("#syncProgressBar"),
   syncProgressDetail: $("#syncProgressDetail"),
+  globalSyncProgress: $("#globalSyncProgress"),
+  globalSyncProgressLabel: $("#globalSyncProgressLabel"),
+  globalSyncProgressValue: $("#globalSyncProgressValue"),
+  globalSyncProgressBar: $("#globalSyncProgressBar"),
+  globalSyncProgressDetail: $("#globalSyncProgressDetail"),
   headerSearch: $("#headerSearch"),
   searchInput: $("#searchInput"),
   tagFilters: $("#tagFilters"),
   latestList: $("#latestList"),
   homeRanking: $("#homeRanking"),
-  homeTags: $("#homeTags"),
+  homeFolders: $("#homeFolders"),
   comicGrid: $("#comicGrid"),
   libraryPager: $("#libraryPager"),
   comicDetail: $("#comicDetail"),
@@ -114,11 +119,21 @@ const elements = {
   slideReader: $("#slideReader"),
   readerTopbar: $("#readerTopbar"),
   deleteComicButton: $("#deleteComicButton"),
+  deletePageButton: $("#deletePageButton"),
+  moveComicButton: $("#moveComicButton"),
   readerStage: $("#readerStage"),
   readerCompleteToast: $("#readerCompleteToast"),
   readerDeleteModal: $("#readerDeleteModal"),
   readerDeleteName: $("#readerDeleteName"),
   confirmDeleteComicButton: $("#confirmDeleteComicButton"),
+  readerDeletePageModal: $("#readerDeletePageModal"),
+  readerDeletePageName: $("#readerDeletePageName"),
+  confirmDeletePageButton: $("#confirmDeletePageButton"),
+  readerMoveModal: $("#readerMoveModal"),
+  readerMoveName: $("#readerMoveName"),
+  readerMoveStatus: $("#readerMoveStatus"),
+  moveCategorySelect: $("#moveCategorySelect"),
+  confirmMoveComicButton: $("#confirmMoveComicButton"),
   progressLabel: $("#progressLabel"),
   progressBar: $("#progressBar"),
   pageSelect: $("#pageSelect"),
@@ -144,6 +159,7 @@ let autoScrollTop = 0;
 let scrollSyncFrame = null;
 let readerCompleteTimer = null;
 let completedComicId = "";
+let backgroundProgressTimer = 0;
 let dataVersion = 0;
 const derivedCache = {
   sortedVersion: -1,
@@ -178,7 +194,12 @@ async function api(path, options = {}) {
     if (timeoutId) clearTimeout(timeoutId);
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "璇锋眰澶辫触");
+  if (!response.ok) {
+    const error = new Error(data.error || "请求失败");
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 
@@ -314,6 +335,16 @@ function categoryPathOptions() {
   return [...categories].sort(naturalSort);
 }
 
+function moveCategoryOptions(currentCategory) {
+  const category = currentCategory || "未分类";
+  const categories = categoryFilterOptions().filter(Boolean);
+  return [...new Set(["未分类", ...categories, category])].sort((a, b) => {
+    if (a === "未分类") return -1;
+    if (b === "未分类") return 1;
+    return naturalSort(a, b);
+  });
+}
+
 function comicMatchesCategory(comic, selectedCategory) {
   if (selectedCategory === "全部") return true;
   const category = comic.category || "未分类";
@@ -380,6 +411,34 @@ function setStatus(message, tone = "") {
   elements.statusLine.dataset.tone = tone;
 }
 
+function setMoveStatus(message = "", tone = "") {
+  if (!elements.readerMoveStatus) return;
+  elements.readerMoveStatus.textContent = message;
+  elements.readerMoveStatus.dataset.tone = tone;
+}
+
+function renderMoveModal(comic) {
+  const disabled = !comic;
+  if (elements.moveComicButton) elements.moveComicButton.disabled = disabled;
+  document.querySelectorAll("[data-open-move-comic]").forEach((button) => {
+    button.disabled = disabled;
+  });
+  if (!elements.readerMoveName || !elements.moveCategorySelect) return;
+  if (!comic) {
+    elements.readerMoveName.textContent = "";
+    elements.moveCategorySelect.innerHTML = "";
+    setMoveStatus("", "");
+    return;
+  }
+  const currentCategory = comic.category || "未分类";
+  elements.readerMoveName.textContent = `${comic.title} · 当前分类：${currentCategory}`;
+  elements.moveCategorySelect.innerHTML = moveCategoryOptions(currentCategory)
+    .map((category) => `<option value="${escapeHTML(category)}">${escapeHTML(category)}</option>`)
+    .join("");
+  elements.moveCategorySelect.value = currentCategory;
+  setMoveStatus("", "");
+}
+
 function secondLevelCategoryGroups(comics) {
   return comics.reduce((groups, comic) => {
     const parts = categoryParts(comic.relativeDir || comic.category || "未分类");
@@ -405,16 +464,28 @@ async function persistCategoryCovers() {
 }
 
 function renderSyncProgress(progress) {
-  if (!elements.syncProgress) return;
   const active = Boolean(progress?.active);
-  elements.syncProgress.hidden = !active;
+  if (elements.syncProgress) elements.syncProgress.hidden = !active;
+  if (elements.globalSyncProgress) elements.globalSyncProgress.hidden = !active;
   if (!active) return;
   const percent = Math.max(0, Math.min(100, Math.round(Number(progress.percent) || 0)));
-  elements.syncProgressLabel.textContent = progress.label || "正在同步";
-  elements.syncProgressValue.textContent = `${percent}%`;
-  elements.syncProgressBar.value = percent;
-  elements.syncProgressBar.setAttribute("aria-valuenow", String(percent));
-  elements.syncProgressDetail.textContent = progress.detail || "正在处理漫画目录...";
+  const label = progress.label || "正在同步";
+  const value = `${percent}%`;
+  const detail = progress.detail || "正在处理漫画目录...";
+  if (elements.syncProgressLabel) elements.syncProgressLabel.textContent = label;
+  if (elements.syncProgressValue) elements.syncProgressValue.textContent = value;
+  if (elements.syncProgressBar) {
+    elements.syncProgressBar.value = percent;
+    elements.syncProgressBar.setAttribute("aria-valuenow", String(percent));
+  }
+  if (elements.syncProgressDetail) elements.syncProgressDetail.textContent = detail;
+  if (elements.globalSyncProgressLabel) elements.globalSyncProgressLabel.textContent = label;
+  if (elements.globalSyncProgressValue) elements.globalSyncProgressValue.textContent = value;
+  if (elements.globalSyncProgressBar) {
+    elements.globalSyncProgressBar.value = percent;
+    elements.globalSyncProgressBar.setAttribute("aria-valuenow", String(percent));
+  }
+  if (elements.globalSyncProgressDetail) elements.globalSyncProgressDetail.textContent = detail;
 }
 
 async function pollSyncProgress() {
@@ -423,9 +494,54 @@ async function pollSyncProgress() {
     renderSyncProgress(progress);
     if (progress.active) {
       setStatus(progress.status || "正在同步本地漫画目录...");
+    } else {
+      stopBackgroundProgressPolling();
     }
+    return progress;
   } catch {
     // The main sync request reports any connection failure.
+  }
+  return null;
+}
+
+function startBackgroundProgressPolling() {
+  if (backgroundProgressTimer) return;
+  pollSyncProgress();
+  backgroundProgressTimer = window.setInterval(pollSyncProgress, 900);
+}
+
+function stopBackgroundProgressPolling() {
+  if (!backgroundProgressTimer) return;
+  window.clearInterval(backgroundProgressTimer);
+  backgroundProgressTimer = 0;
+}
+
+function setSyncControlsDisabled(disabled) {
+  if (elements.syncLibraryButton) elements.syncLibraryButton.disabled = disabled;
+  const addDirectoryButton = elements.pathForm?.querySelector('button[type="submit"]');
+  if (addDirectoryButton) addDirectoryButton.disabled = disabled;
+}
+
+async function withSyncProgress({ status, detail, task, completionDetail }) {
+  setStatus(status);
+  renderSyncProgress({ active: true, percent: 0, label: "准备同步", detail });
+  setSyncControlsDisabled(true);
+  const progressTimer = setInterval(pollSyncProgress, 350);
+  let result;
+  try {
+    result = await task();
+    await pollSyncProgress();
+    renderSyncProgress({
+      active: true,
+      percent: 100,
+      label: "同步完成",
+      detail: completionDetail(result)
+    });
+    return result;
+  } finally {
+    clearInterval(progressTimer);
+    setSyncControlsDisabled(false);
+    if (!result) renderSyncProgress(null);
   }
 }
 
@@ -538,24 +654,60 @@ function imagePreview(src, width = 420) {
 }
 
 function seriesTitleFor(comic) {
-  const title = String(comic?.title || "").trim();
+  const normalizeSeriesText = (value) => String(value || "")
+    .normalize("NFKC")
+    .replace(/(?:\.|…|‥|⋯){2,}/gu, "……")
+    .replace(/[~～]/gu, "〜");
+  const title = normalizeSeriesText(comic?.title).trim();
   if (!title) return "";
   const cleaned = title
     .replace(/\s+/g, " ")
     .replace(/[【\[](?:中国翻訳|中国翻译|中文|汉化|漢化|DL版|無修正|无修正|完结?|完)[^\]】]*[】\]]/gi, "")
     .trim();
   const workTitle = cleaned.replace(/^[【\[][^】\]]+[】\]]\s*/u, "").trim();
-  const match = workTitle.match(/^(.{2,}?)\s*(?:第?\s*\d{1,4}\s*(?:话|話|回|集|卷|章|册|頁|页)?|0*\d{1,4})(?:\s+.*)?$/u);
-  if (!match) return title;
-  const base = match[1].trim().replace(/[：:：\-_\s]+$/u, "");
+  const normalizeBase = (value) => value
+    .normalize("NFKC")
+    .replace(/(?:\.|…|‥|⋯){2,}/gu, "……")
+    .replace(/[~～]/gu, "〜")
+    .trim()
+    .replace(/[!！?？]+$/u, "")
+    .replace(/[：:_\s-]+$/u, "")
+    .trim();
+  const rangeMatch = workTitle.match(/^(.{2,}?)\s*[!！]?\s*[（(]\s*\d{1,4}(?:\.\d+)?\s*[-–—~〜～]\s*\d{1,4}(?:\.\d+)?\s*[)）](?:\s*合集)?(?:\s*[【\[].*)?$/u);
+  if (rangeMatch) {
+    const base = normalizeBase(rangeMatch[1]);
+    return base.length >= 2 ? base : title;
+  }
+  const match = workTitle.match(/^(.{2,}?)\s*(?:第?\s*\d{1,4}(?:\.\d+)?(?:\s*[-–—]\s*\d{1,4}(?:\.\d+)?)?\s*(?:话|話|回|集|卷|章|册|頁|页)?|0*\d{1,4}(?:\.\d+)?)(?=$|\s|[｜|〜～~—–\-_:：])(?:[\s｜|〜～~—–\-_:：]+.*)?$/u);
+  if (!match) {
+    const base = normalizeBase(workTitle);
+    return base.length >= 2 ? base : title;
+  }
+  const base = normalizeBase(match[1]);
   return base.length >= 2 ? base : title;
+}
+
+function seriesAuthorKeyFor(comic) {
+  const title = String(comic?.title || "")
+    .normalize("NFKC")
+    .trim();
+  const match = title.match(/^[【\[]\s*([^\]】]+?)\s*[】\]]/u);
+  if (!match) return "";
+  return match[1]
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function seriesKeyFor(comic) {
+  return `${seriesAuthorKeyFor(comic)}::${seriesTitleFor(comic)}`;
 }
 
 function chapterNumberFor(comic) {
   const title = String(comic?.title || "")
     .trim()
     .replace(/^[【\[][^】\]]+[】\]]\s*/u, "");
-  const matches = [...title.matchAll(/(?:第\s*)?(\d{1,4})\s*(?:话|話|回|集|卷|章|册|頁|页)?/gu)];
+  const matches = [...title.matchAll(/(?:第\s*)?(\d{1,4}(?:\.\d+)?)\s*(?:话|話|回|集|卷|章|册|頁|页)?/gu)];
   if (!matches.length) return null;
   return Number(matches[matches.length - 1][1]);
 }
@@ -588,6 +740,7 @@ function buildCollectionItems(comics) {
     const category = comic.category || "未分类";
     const parts = categoryParts(category);
     const seriesTitle = seriesTitleFor(comic);
+    const seriesKey = seriesKeyFor(comic);
     const matchingFolderCategory = parts.length === 1
       ? folderGroups.get(collectionKeyFor(parts[0], comic.title))
       : "";
@@ -601,7 +754,7 @@ function buildCollectionItems(comics) {
     const title = hasFolderGroup ? folderParts[folderParts.length - 1] : seriesTitle;
     const key = hasFolderGroup
       ? collectionKeyFor(folderCategory, `folder:${folderCategory}`)
-      : collectionKeyFor(category, seriesTitle);
+      : collectionKeyFor(category, seriesKey);
     if (!groups.has(key)) {
       groups.set(key, {
         key,
@@ -616,10 +769,11 @@ function buildCollectionItems(comics) {
 
   return [...groups.values()]
     .map((group) => {
-      const shouldUseChapterOrder = group.comics.every((comic) => seriesTitleFor(comic) === group.title);
+      const shouldUseChapterOrder = group.comics.every((comic) => seriesKeyFor(comic) === seriesKeyFor(group.comics[0]));
       const sorted = group.comics.sort(shouldUseChapterOrder ? compareComicsByChapterNumber : compareComicsByUpdated);
+      const latestComic = [...group.comics].sort(compareComicsByUpdated)[0];
       if (sorted.length === 1) return { type: "comic", comic: sorted[0], sortComic: sorted[0] };
-      return { type: "collection", ...group, comics: sorted, sortComic: sorted[0] };
+      return { type: "collection", ...group, comics: sorted, sortComic: latestComic };
     })
     .sort((a, b) => compareComicsByUpdated(a.sortComic, b.sortComic));
 }
@@ -661,7 +815,7 @@ function comicCard(comic) {
 }
 
 function collectionCard(collection) {
-  const lead = collection.comics[0];
+  const lead = collection.sortComic || collection.comics[0];
   const totalPages = collection.comics.reduce((sum, comic) => sum + (Number(comic.pageCount) || 0), 0);
   return `
     <article class="directory-card collection-card" data-collection-key="${escapeHTML(collection.key)}">
@@ -823,10 +977,10 @@ function renderTags() {
     .map((category) => `<button class="chip ${category === state.activeCategory ? "active" : ""}" type="button" data-category="${escapeHTML(category)}">${escapeHTML(category)}</button>`)
     .join("");
 
-  elements.homeTags.innerHTML = allTags()
-    .filter((tag) => tag !== "全部")
-    .map((tag) => `<a href="#library" data-home-tag="${escapeHTML(tag)}">${escapeHTML(tag)}</a>`)
-    .join("") || "<span class=\"muted\">暂无标签</span>";
+  elements.homeFolders.innerHTML = allCategories()
+    .filter((category) => category !== "全部")
+    .map((category) => `<a href="#library" data-home-category="${escapeHTML(category)}">${escapeHTML(category)}</a>`)
+    .join("") || "<span class=\"muted\">暂无文件夹分类</span>";
 }
 
 function renderHome() {
@@ -858,10 +1012,7 @@ function renderLibrary() {
   const allCategoryLabel = allCategories()[0];
   const isAllCategory = state.activeCategory === allCategoryLabel;
   if (isAllCategory && !isTagResult) {
-    displayList = [...displayList].sort((a, b) => (
-      directoryItemAddedTime(b) - directoryItemAddedTime(a)
-      || naturalSort(a.sortComic.title, b.sortComic.title)
-    ));
+    displayList = [...displayList].sort((a, b) => compareComicsByUpdated(a.sortComic, b.sortComic));
   }
   elements.resultCount.textContent = isTagResult
     ? `标签：${state.activeTag} · ${list.length} 本漫画`
@@ -979,7 +1130,19 @@ function renderCategories() {
     .sort(([a], [b]) => naturalSort(a, b));
   const titleHint = document.querySelector("#categoriesView .section-title span");
   if (titleHint) titleHint.textContent = `共 ${groups.length} 个二级目录`;
-  elements.categoryBoard.innerHTML = groups.map(([category, comics]) => {
+  const randomCoverComic = sortedComics()[0];
+  const randomCard = randomCoverComic ? `
+    <button class="category-cover-card category-random-card" type="button" data-random-comic>
+      <img src="${coverPreview(randomCoverComic)}" alt="随机漫画封面" loading="eager" decoding="async">
+      <div class="category-cover-shade"></div>
+      <span class="category-random-mark" aria-hidden="true">↻</span>
+      <div class="category-cover-copy">
+        <span>从 ${state.comics.length} 部漫画中抽取</span>
+        <h2>随机</h2>
+      </div>
+    </button>
+  ` : "";
+  elements.categoryBoard.innerHTML = randomCard + groups.map(([category, comics]) => {
     const sorted = [...comics].sort(compareComicsByUpdated);
     const savedCover = state.categoryCovers[category];
     const coverComic = sorted.find((comic) => comic.id === savedCover) || sorted[0];
@@ -1090,6 +1253,7 @@ function renderCollectionDetail(collection) {
 function renderDetail() {
   const collection = getSelectedCollection();
   if (collection && !state.selectedComicId) {
+    renderMoveModal(null);
     renderCollectionDetail(collection);
     return;
   }
@@ -1104,6 +1268,7 @@ function renderDetail() {
 
   const comic = getSelectedComic();
   if (!comic) {
+    renderMoveModal(null);
     elements.comicDetail.innerHTML = emptyBlock("请选择漫画", "从漫画库、首页或排行榜点击一本漫画进入详情。");
     return;
   }
@@ -1137,7 +1302,13 @@ function renderDetail() {
 
         <section class="detail-summary">
           <dl class="plain-meta">
-            <div><dt>分类：</dt><dd>${escapeHTML(comic.category || "未分类")}</dd></div>
+            <div>
+              <dt>分类：</dt>
+              <dd class="category-action-row">
+                <span>${escapeHTML(comic.category || "未分类")}</span>
+                <button class="secondary-button detail-move-button" type="button" data-open-move-comic popovertarget="readerMoveModal">移动</button>
+              </dd>
+            </div>
             <div><dt>页数：</dt><dd>${comic.pageCount}P</dd></div>
             <div>
               <dt>标签：</dt>
@@ -1223,13 +1394,18 @@ function renderDetail() {
       </nav>
     </div>
   `;
+  renderMoveModal(comic);
 }
 
 function renderReader() {
   const comic = getSelectedComic();
 
   elements.deleteComicButton.disabled = !comic;
-  if (comic) elements.readerDeleteName.textContent = comic.title;
+  elements.deletePageButton.disabled = !comic;
+  renderMoveModal(comic);
+  if (comic) {
+    elements.readerDeleteName.textContent = comic.title;
+  }
 
   if (!comic) {
     elements.pageSelect.innerHTML = "";
@@ -1242,6 +1418,7 @@ function renderReader() {
   }
 
   const pages = comicPages(comic);
+  elements.deletePageButton.disabled = pages.length <= 1;
   if (!pages.length) {
     elements.pageSelect.innerHTML = "";
     elements.readerStage.className = `reader-stage mode-${state.mode}${state.autoFit ? " auto-fit" : ""}`;
@@ -1253,6 +1430,7 @@ function renderReader() {
   }
 
   state.pageIndex = Math.max(0, Math.min(Number(state.pageIndex) || 0, pages.length - 1));
+  elements.readerDeletePageName.textContent = `第 ${state.pageIndex + 1} / ${pages.length} 页 · ${pageLabel(pages[state.pageIndex], state.pageIndex)}`;
   elements.pageSelect.innerHTML = pages.map((_, index) => `<option value="${index}">第 ${index + 1} 页</option>`).join("");
   elements.pageSelect.value = String(state.pageIndex);
   elements.slideReader.classList.toggle("controls-open", state.controlsOpen);
@@ -1422,6 +1600,64 @@ async function deleteSelectedComic() {
   }
 }
 
+async function deleteSelectedPage() {
+  const comic = getSelectedComic();
+  if (!comic) throw new Error("未找到当前漫画");
+  const pages = comicPages(comic);
+  if (pages.length <= 1) throw new Error("至少需要保留一张图片");
+  const deletedPage = state.pageIndex + 1;
+  elements.confirmDeletePageButton.disabled = true;
+  elements.confirmDeletePageButton.textContent = "删除中...";
+  try {
+    const result = await api(`/api/comics/${encodeURIComponent(comic.id)}/pages/${state.pageIndex}`, { method: "DELETE" });
+    const updatedComic = mergeComic(result.comic);
+    const nextPages = comicPages(updatedComic);
+    state.pageIndex = Math.max(0, Math.min(state.pageIndex, nextPages.length - 1));
+    state.readerScrollEnd = Math.min(nextPages.length, Math.max(READER_SCROLL_WINDOW, state.readerScrollEnd - 1));
+    completedComicId = "";
+    invalidateDerivedCache();
+    if (elements.readerDeletePageModal.matches(":popover-open")) elements.readerDeletePageModal.hidePopover();
+    renderReader();
+    setStatus(`已永久删除第 ${deletedPage} 页`, "ok");
+  } finally {
+    elements.confirmDeletePageButton.disabled = false;
+    elements.confirmDeletePageButton.textContent = "永久删除此页";
+  }
+}
+
+async function moveSelectedComic() {
+  const comic = getSelectedComic();
+  if (!comic) throw new Error("未找到当前漫画");
+  const category = elements.moveCategorySelect.value || "未分类";
+  setMoveStatus("正在移动本地文件夹...", "");
+  elements.confirmMoveComicButton.disabled = true;
+  elements.confirmMoveComicButton.textContent = "移动中...";
+  try {
+    const result = await api(`/api/comics/${encodeURIComponent(comic.id)}/move`, {
+      method: "PUT",
+      body: JSON.stringify({ category })
+    });
+    const movedComic = mergeComic(result.comic);
+    state.comics = state.comics.map((item) => item.id === (result.oldId || comic.id) ? movedComic : item);
+    if (result.metadata && typeof result.metadata === "object") {
+      state.meta = result.metadata;
+    } else if (movedComic.id !== comic.id && state.meta[comic.id]) {
+      state.meta[movedComic.id] = state.meta[comic.id];
+      delete state.meta[comic.id];
+    }
+    state.selectedComicId = movedComic.id;
+    persistSelectedComic();
+    invalidateDerivedCache();
+    if (elements.readerMoveModal.matches(":popover-open")) elements.readerMoveModal.hidePopover();
+    setMoveStatus("", "");
+    renderAll();
+    setStatus(result.moved ? `已移动到分类：${movedComic.category || "未分类"}` : "漫画已经在目标分类中", "ok");
+  } finally {
+    elements.confirmMoveComicButton.disabled = false;
+    elements.confirmMoveComicButton.textContent = "移动漫画";
+  }
+}
+
 function showReaderComplete(comic) {
   if (!comic || completedComicId === comic.id || !elements.readerCompleteToast) return;
   completedComicId = comic.id;
@@ -1530,6 +1766,11 @@ async function loadLibrary({ refresh = false } = {}) {
   renderRootList();
   renderAll();
   setStatus(state.libraryRoots.length ? `已导入 ${state.libraryRoots.length} 个漫画根目录${data.scanning ? "（后台同步中）" : ""}` : "请添加漫画根目录。", state.libraryRoots.length ? "ok" : "");
+  if (data.scanning) {
+    startBackgroundProgressPolling();
+  } else if (!backgroundProgressTimer) {
+    renderSyncProgress(null);
+  }
 }
 
 async function scanPath(pathValue) {
@@ -1538,12 +1779,21 @@ async function scanPath(pathValue) {
     setStatus("请输入漫画根目录。", "error");
     return;
   }
-  setStatus("正在添加目录并同步...");
-  await api("/api/config", {
-    method: "POST",
-    body: JSON.stringify({ libraryRoots: [...state.libraryRoots, libraryRoot] })
+  await withSyncProgress({
+    status: "正在添加目录并同步...",
+    detail: "正在添加漫画根目录...",
+    task: async () => {
+      await api("/api/config", {
+        method: "POST",
+        body: JSON.stringify({ libraryRoots: [...state.libraryRoots, libraryRoot] })
+      });
+      await loadLibrary({ refresh: true });
+      return { comicCount: state.comics.length };
+    },
+    completionDetail: (result) => `共发现 ${result.comicCount} 本漫画`
   });
-  await loadLibrary({ refresh: true });
+  setStatus(`目录添加完成：${state.comics.length} 本漫画`, "ok");
+  setTimeout(() => renderSyncProgress(null), 1200);
   location.hash = "library";
 }
 
@@ -1564,19 +1814,12 @@ async function syncLibrary() {
     setStatus("请先添加漫画根目录。", "error");
     return;
   }
-  setStatus("正在同步本地漫画目录...");
-  renderSyncProgress({ active: true, percent: 0, label: "准备同步", detail: "正在读取漫画根目录..." });
-  if (elements.syncLibraryButton) elements.syncLibraryButton.disabled = true;
-  const progressTimer = setInterval(pollSyncProgress, 350);
-  let data;
-  try {
-    data = await api("/api/sync", { method: "POST" });
-    renderSyncProgress({ active: true, percent: 100, label: "同步完成", detail: `共发现 ${data.comics?.length || 0} 本漫画` });
-  } finally {
-    clearInterval(progressTimer);
-    if (elements.syncLibraryButton) elements.syncLibraryButton.disabled = false;
-    if (!data) renderSyncProgress(null);
-  }
+  const data = await withSyncProgress({
+    status: "正在同步本地漫画目录...",
+    detail: "正在读取漫画根目录...",
+    task: () => api("/api/sync", { method: "POST" }),
+    completionDetail: (result) => `共发现 ${result.comics?.length || 0} 本漫画`
+  });
   state.libraryRoot = data.libraryRoot || "";
   state.libraryRoots = data.libraryRoots || [];
   state.comics = data.comics || [];
@@ -1680,7 +1923,7 @@ if (elements.rootList) elements.rootList.addEventListener("click", async (event)
   if (!button) return;
   try {
     const nextRoots = state.libraryRoots.filter((root) => root !== button.dataset.removeRoot);
-    setStatus("姝ｅ湪鏇存柊鐩綍鍒楄〃...");
+    setStatus("正在更新目录列表...");
     await api("/api/config", {
       method: "POST",
       body: JSON.stringify({ libraryRoots: nextRoots })
@@ -1804,17 +2047,27 @@ document.addEventListener("click", (event) => {
   document.querySelector("#rankingView .section-title")?.scrollIntoView({ block: "start" });
 });
 
-elements.homeTags.addEventListener("click", (event) => {
-  const link = event.target.closest("[data-home-tag]");
+elements.homeFolders.addEventListener("click", (event) => {
+  const link = event.target.closest("[data-home-category]");
   if (!link) return;
-  state.activeTag = link.dataset.homeTag;
-  state.activeCategory = "全部";
+  state.activeTag = "全部";
+  state.activeCategory = link.dataset.homeCategory;
   state.libraryPage = 1;
   persistLibraryView();
   renderAll();
 });
 
 document.addEventListener("click", (event) => {
+  const randomTarget = event.target.closest("[data-random-comic]");
+  if (randomTarget) {
+    if (!state.comics.length) return;
+    const comic = state.comics[Math.floor(Math.random() * state.comics.length)];
+    openComic(comic.id).catch((error) => {
+      setStatus(`随机打开失败：${friendlyError(error)}`, "error");
+    });
+    return;
+  }
+
   const collectionTarget = event.target.closest("[data-collection-key]");
   if (collectionTarget) {
     openCollection(collectionTarget.dataset.collectionKey);
@@ -2103,6 +2356,35 @@ elements.readerDeleteModal.addEventListener("click", async (event) => {
   }
 });
 
+elements.readerDeletePageModal.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-delete-page-cancel]")) return;
+  if (!event.target.closest("#confirmDeletePageButton")) return;
+  try {
+    await deleteSelectedPage();
+  } catch (error) {
+    setStatus(`删除当前页失败：${friendlyError(error)}`, "error");
+  }
+});
+
+elements.readerMoveModal.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-move-cancel]")) return;
+  if (!event.target.closest("#confirmMoveComicButton")) return;
+  try {
+    await moveSelectedComic();
+  } catch (error) {
+    const message = friendlyError(error);
+    if (error.status === 409 || message.includes("同步扫描中")) {
+      startBackgroundProgressPolling();
+      const progress = await pollSyncProgress();
+      if (!progress?.active) {
+        setStatus("扫描状态已更新，请再试一次移动。", "ok");
+      }
+    }
+    setMoveStatus(message, "error");
+    setStatus(`移动漫画失败：${message}`, "error");
+  }
+});
+
 elements.themeToggle.addEventListener("click", () => {
   document.body.classList.toggle("dark");
   localStorage.setItem("comicTheme", document.body.classList.contains("dark") ? "dark" : "light");
@@ -2134,5 +2416,5 @@ syncThemeToggleIcon();
 syncViewFromHash();
 loadLibrary().catch((error) => {
   renderAll();
-  setStatus(`鏈湴鏈嶅姟杩炴帴澶辫触锛?{error.message}`, "error");
+  setStatus(`本地服务连接失败：${error.message}`, "error");
 });

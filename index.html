@@ -32,6 +32,15 @@
       </nav>
     </header>
 
+    <div class="global-sync-progress" id="globalSyncProgress" role="status" aria-live="polite" hidden>
+      <div class="global-sync-copy">
+        <strong id="globalSyncProgressLabel">扫描漫画文件</strong>
+        <span id="globalSyncProgressValue">0%</span>
+      </div>
+      <progress id="globalSyncProgressBar" max="100" value="0" aria-labelledby="globalSyncProgressLabel"></progress>
+      <p id="globalSyncProgressDetail">正在处理漫画目录...</p>
+    </div>
+
     <main>
       <section class="library-config" id="libraryConfig" hidden>
         <form class="path-form" id="pathForm">
@@ -75,10 +84,10 @@
 
             <div class="side-block">
               <div class="section-title">
-                <h2>标签分类</h2>
+                <h2>分类</h2>
                 <a href="#categories">全部</a>
               </div>
-              <div class="tag-cloud" id="homeTags"></div>
+              <div class="tag-cloud" id="homeFolders"></div>
             </div>
           </aside>
         </div>
@@ -122,6 +131,8 @@
           <div class="reader-topbar" id="readerTopbar">
             <a class="reader-pill" href="#detail">‹ 返回</a>
             <button class="reader-pill reader-delete-button" id="deleteComicButton" type="button" popovertarget="readerDeleteModal">删除</button>
+            <button class="reader-pill reader-delete-page-button" id="deletePageButton" type="button" popovertarget="readerDeletePageModal" title="删除当前阅读页">删页</button>
+            <button class="reader-pill reader-move-button" id="moveComicButton" type="button" popovertarget="readerMoveModal">移动</button>
             <div class="reader-spacer"></div>
             <button class="reader-pill" id="autoToggle" type="button">自动：关</button>
             <div class="auto-popover" id="autoPopover" hidden>
@@ -141,7 +152,10 @@
           <div class="reader-stage" id="readerStage">
             <p class="empty-state">从漫画库选择一本漫画开始阅读。</p>
           </div>
-          <div class="reader-page-badge" id="progressLabel">0 / 0</div>
+          <div class="reader-page-badge" aria-label="阅读进度">
+            <span id="progressLabel">0 / 0</span>
+            <div><i id="progressBar"></i></div>
+          </div>
           <div class="reader-complete-toast" id="readerCompleteToast" role="status" aria-live="polite" hidden>漫画已阅读完</div>
           <div class="reader-delete-modal" id="readerDeleteModal" role="dialog" aria-modal="true" aria-labelledby="readerDeleteTitle" popover="manual">
             <button class="reader-delete-backdrop" type="button" data-delete-cancel popovertarget="readerDeleteModal" popovertargetaction="hide" aria-label="取消删除"></button>
@@ -155,8 +169,17 @@
               </div>
             </section>
           </div>
-          <div class="reader-progress" aria-label="阅读进度">
-            <div><i id="progressBar"></i></div>
+          <div class="reader-delete-modal" id="readerDeletePageModal" role="dialog" aria-modal="true" aria-labelledby="readerDeletePageTitle" popover="manual">
+            <button class="reader-delete-backdrop" type="button" data-delete-page-cancel popovertarget="readerDeletePageModal" popovertargetaction="hide" aria-label="取消删除当前页"></button>
+            <section class="reader-delete-dialog">
+              <span>永久删除本地图片</span>
+              <h2 id="readerDeletePageTitle">确认删除当前阅读页？</h2>
+              <p id="readerDeletePageName"></p>
+              <div>
+                <button class="reader-delete-cancel" type="button" data-delete-page-cancel popovertarget="readerDeletePageModal" popovertargetaction="hide">取消</button>
+                <button class="reader-delete-confirm" id="confirmDeletePageButton" type="button">永久删除此页</button>
+              </div>
+            </section>
           </div>
           <select id="pageSelect" class="reader-hidden-select" aria-label="选择页码"></select>
           <select id="readingMode" class="reader-hidden-select" aria-label="阅读模式">
@@ -166,8 +189,25 @@
           <input id="brightness" class="reader-hidden-select" type="range" min="70" max="115" value="100">
         </div>
       </section>
+      <div class="reader-delete-modal reader-move-modal" id="readerMoveModal" role="dialog" aria-modal="true" aria-labelledby="readerMoveTitle" popover="manual">
+        <button class="reader-delete-backdrop" type="button" data-move-cancel popovertarget="readerMoveModal" popovertargetaction="hide" aria-label="取消移动漫画"></button>
+        <section class="reader-delete-dialog">
+          <span>移动本地文件夹</span>
+          <h2 id="readerMoveTitle">移动这部漫画？</h2>
+          <p id="readerMoveName"></p>
+          <label class="reader-move-field">
+            <span>目标分类</span>
+            <select id="moveCategorySelect"></select>
+          </label>
+          <p class="reader-move-status" id="readerMoveStatus" role="status" aria-live="polite"></p>
+          <div>
+            <button class="reader-delete-cancel" type="button" data-move-cancel popovertarget="readerMoveModal" popovertargetaction="hide">取消</button>
+            <button class="reader-move-confirm" id="confirmMoveComicButton" type="button">移动漫画</button>
+          </div>
+        </section>
+      </div>
     </main>
 
-    <script src="app.js?v=20260615-11"></script>
+    <script src="app.js?v=20260617-5"></script>
   </body>
 </html>

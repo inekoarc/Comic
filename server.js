@@ -6,7 +6,7 @@ const { createReadStream } = require("node:fs");
 const { execFile } = require("node:child_process");
 
 const PORT = Number(process.env.PORT || 9000);
-const HOST = process.env.HOST || "127.0.0.1";
+const HOST = process.env.HOST || "0.0.0.0";
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "data");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
@@ -354,6 +354,28 @@ function categoryForRelativeDir(relativeDir) {
   return parts.slice(0, -1).join(" / ");
 }
 
+function categoryPathParts(category) {
+  const value = String(category || "").trim();
+  if (!value || value === "全部" || value === "未分类") return [];
+  return value.split(/\s*\/\s*|[\\]+/).map((part) => part.trim()).filter(Boolean);
+}
+
+function assertSafePathParts(parts) {
+  if (parts.some((part) => part === "." || part === ".." || /[<>:"|?*\x00-\x1F]/.test(part))) {
+    throw new Error("目标分类名称包含不能用于文件夹的字符");
+  }
+}
+
+async function uniqueDirectoryPath(parentDir, folderName) {
+  let candidate = path.join(parentDir, folderName);
+  let suffix = 2;
+  while (await fs.stat(candidate).catch(() => null)) {
+    candidate = path.join(parentDir, `${folderName} (${suffix})`);
+    suffix += 1;
+  }
+  return candidate;
+}
+
 function titleForRelativeDir(relativeDir) {
   if (relativeDir === ".") return "根目录漫画";
   const parts = relativeDir.split(/[\\/]+/).filter(Boolean);
@@ -611,9 +633,6 @@ async function getLibraryIndex(libraryRoots, { refresh = false } = {}) {
   if (refresh || !cacheMatches) {
     return refreshIndex(libraryRoots);
   }
-  if (!scanPromise) {
-    refreshIndex(libraryRoots).catch((error) => console.error("Background scan failed:", error.message));
-  }
   return cached;
 }
 
@@ -831,6 +850,174 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  const pageDeleteMatch = req.method === "DELETE"
+    ? url.pathname.match(/^\/api\/comics\/([^/]+)\/pages\/(\d+)$/)
+    : null;
+  if (pageDeleteMatch) {
+    const id = decodeURIComponent(pageDeleteMatch[1]);
+    const pageIndex = Number(pageDeleteMatch[2]);
+    const config = await getConfig();
+    if (!config.libraryRoots.length || !id || !Number.isSafeInteger(pageIndex)) {
+      sendError(res, 400, "Missing comic id or page index");
+      return;
+    }
+    const index = await getLibraryIndex(config.libraryRoots);
+    const comicIndex = index.comics.findIndex((item) => item.id === id);
+    const comic = index.comics[comicIndex];
+    if (!comic) {
+      sendError(res, 404, "Comic was not found");
+      return;
+    }
+    if (!Array.isArray(comic.pages) || comic.pages.length <= 1) {
+      sendError(res, 409, "At least one image must remain in the comic");
+      return;
+    }
+    if (pageIndex < 0 || pageIndex >= comic.pages.length) {
+      sendError(res, 404, "Comic page was not found");
+      return;
+    }
+    const page = new URL(comic.pages[pageIndex], "http://local");
+    const relativeFile = page.searchParams.get("file");
+    const libraryRoot = findRootById(config.libraryRoots, comic.rootId);
+    const filePath = path.resolve(libraryRoot || "", relativeFile || "");
+    const comicDir = path.resolve(libraryRoot || "", comic.relativeDir || ".");
+    if (!libraryRoot || !relativeFile || !isInside(libraryRoot, filePath) || !isInside(comicDir, filePath) || !isImage(filePath)) {
+      sendError(res, 403, "Refusing to delete an image outside the comic folder");
+      return;
+    }
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (!stat?.isFile()) {
+      sendError(res, 404, "Comic page file was not found");
+      return;
+    }
+    await fs.unlink(filePath);
+    const pages = comic.pages.filter((_, index) => index !== pageIndex);
+    const updatedComic = {
+      ...comic,
+      pages,
+      pageCount: pages.length,
+      cover: pages[0],
+      coverThumb: thumbUrlFromImageUrl(pages[0]),
+      dirMtimeMs: Date.now(),
+      updatedAt: new Date().toISOString()
+    };
+    const comics = [...index.comics];
+    comics[comicIndex] = updatedComic;
+    await saveIndex({ ...index, scannedAt: new Date().toISOString(), comics });
+    sendJson(res, 200, {
+      deleted: true,
+      pageIndex,
+      comic: { ...publicComic(updatedComic), pages: updatedComic.pages }
+    });
+    return;
+  }
+
+  if (req.method === "PUT" && /^\/api\/comics\/[^/]+\/move$/.test(url.pathname)) {
+    if (scanPromise) {
+      sendError(res, 409, "同步扫描中，请稍后再移动漫画");
+      return;
+    }
+    const id = decodeURIComponent(url.pathname.split("/")[3] || "");
+    const body = await readRequestBody(req);
+    const targetCategory = String(body.category || "").trim() || "未分类";
+    const config = await getConfig();
+    if (!config.libraryRoots.length || !id) {
+      sendError(res, 400, "Missing comic id");
+      return;
+    }
+    const index = await getLibraryIndex(config.libraryRoots);
+    const comicIndex = index.comics.findIndex((item) => item.id === id);
+    const comic = index.comics[comicIndex];
+    if (!comic) {
+      sendError(res, 404, "Comic was not found");
+      return;
+    }
+    const libraryRoot = findRootById(config.libraryRoots, comic.rootId);
+    const sourceDir = path.resolve(libraryRoot || "", comic.relativeDir || ".");
+    if (!libraryRoot || sourceDir === path.resolve(libraryRoot) || !isInside(libraryRoot, sourceDir)) {
+      sendError(res, 403, "Refusing to move the library root");
+      return;
+    }
+    const stat = await fs.stat(sourceDir).catch(() => null);
+    if (!stat?.isDirectory()) {
+      sendError(res, 404, "Comic folder was not found");
+      return;
+    }
+
+    let categoryParts;
+    try {
+      categoryParts = categoryPathParts(targetCategory);
+      assertSafePathParts(categoryParts);
+    } catch (error) {
+      sendError(res, 400, error.message);
+      return;
+    }
+    const folderName = titleForRelativeDir(comic.relativeDir || ".");
+    if (!folderName || folderName === "根目录漫画" || folderName === "." || folderName === "..") {
+      sendError(res, 400, "Comic folder name is invalid");
+      return;
+    }
+    const targetParent = path.resolve(libraryRoot, ...categoryParts);
+    if (!isInside(libraryRoot, targetParent)) {
+      sendError(res, 403, "Refusing to move outside the library root");
+      return;
+    }
+    await fs.mkdir(targetParent, { recursive: true });
+    let targetDir = path.join(targetParent, folderName);
+    if (path.resolve(targetDir) === sourceDir) {
+      sendJson(res, 200, { moved: false, comic: { ...publicComic(comic), pages: comic.pages }, oldId: comic.id, metadata: await getMetadata() });
+      return;
+    }
+    targetDir = await uniqueDirectoryPath(targetParent, folderName);
+    await fs.rename(sourceDir, targetDir);
+
+    const nextRelativeDir = path.relative(libraryRoot, targetDir) || ".";
+    const nextId = idFor(`${comic.rootId}:${nextRelativeDir}`);
+    const pages = (comic.pages || []).map((page) => {
+      const parsed = new URL(page, "http://local");
+      const file = parsed.searchParams.get("file") || "";
+      return pageUrl(comic.rootId, path.join(nextRelativeDir, path.basename(file)));
+    });
+    const dirStat = await fs.stat(targetDir).catch(() => null);
+    const updatedComic = {
+      ...comic,
+      id: nextId,
+      category: categoryForRelativeDir(nextRelativeDir),
+      relativeDir: nextRelativeDir,
+      source: `${categoryForRelativeDir(nextRelativeDir)} · ${pages.length}P`,
+      pages,
+      pageCount: pages.length,
+      cover: pages[0] || comic.cover,
+      coverThumb: pages[0] ? thumbUrlFromImageUrl(pages[0]) : comic.coverThumb,
+      dirMtimeMs: dirStat?.mtimeMs || Date.now(),
+      updatedAt: dirStat?.mtimeMs ? new Date(dirStat.mtimeMs).toISOString() : new Date().toISOString(),
+      rootPath: libraryRoot
+    };
+    const comics = [...index.comics];
+    comics[comicIndex] = updatedComic;
+    await saveIndex({ ...index, scannedAt: new Date().toISOString(), comics });
+
+    const metadata = await getMetadata();
+    if (metadata[comic.id] && comic.id !== nextId) {
+      metadata[nextId] = metadata[comic.id];
+      delete metadata[comic.id];
+      await writeJson(META_FILE, metadata);
+    }
+    const categoryCovers = Object.fromEntries(
+      Object.entries(config.categoryCovers).map(([category, comicId]) => [category, comicId === comic.id ? nextId : comicId])
+    );
+    if (Object.values(config.categoryCovers).includes(comic.id)) {
+      await saveConfig(config.libraryRoots, categoryCovers);
+    }
+    sendJson(res, 200, {
+      moved: true,
+      oldId: comic.id,
+      comic: { ...publicComic(updatedComic), pages: updatedComic.pages },
+      metadata
+    });
+    return;
+  }
+
   if (req.method === "DELETE" && /^\/api\/comics\/[^/]+$/.test(url.pathname)) {
     const id = decodeURIComponent(url.pathname.split("/")[3] || "");
     const config = await getConfig();
@@ -969,7 +1156,10 @@ const server = http.createServer(async (req, res) => {
 
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
-    console.log(`Local comic server: http://${HOST}:${PORT}`);
+    console.log(`Comic server listening on http://${HOST}:${PORT}`);
+    if (HOST === "0.0.0.0") {
+      console.log(`Local access: http://127.0.0.1:${PORT}`);
+    }
   });
 }
 
