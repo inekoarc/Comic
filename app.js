@@ -1,15 +1,17 @@
 ﻿const DETAIL_PAGE_SIZE = 12;
 const PORTRAIT_DETAIL_PAGE_SIZE = 12;
-const LIBRARY_PAGE_SIZE = 25;
-const TAG_RESULT_PAGE_SIZE = 20;
+const LIBRARY_PAGE_SIZE = 15;
+const TAG_RESULT_PAGE_SIZE = 15;
+const SEARCH_RESULT_PAGE_SIZE = 15;
 const CATEGORY_PREVIEW_SIZE = 10;
-const CATEGORY_PAGE_SIZE = 20;
+const CATEGORY_PAGE_SIZE = 15;
 const RANKING_PAGE_SIZE = 50;
 const READER_SCROLL_WINDOW = 8;
 const LIBRARY_VIEW_STORAGE_KEY = "comicLibraryView";
 const SELECTED_COMIC_STORAGE_KEY = "comicSelectedComic";
 const SELECTED_COLLECTION_STORAGE_KEY = "comicSelectedCollection";
 const CATEGORY_COVERS_STORAGE_KEY = "comicCategoryCovers";
+const READER_KEY_SPEED_STORAGE_KEY = "comicReaderKeySpeed";
 
 function readSavedLibraryView() {
   try {
@@ -45,6 +47,14 @@ function readSavedCategoryCovers() {
   }
 }
 
+function readSavedReaderKeySpeed() {
+  try {
+    return Math.max(200, Math.min(1800, Number(localStorage.getItem(READER_KEY_SPEED_STORAGE_KEY)) || 850));
+  } catch {
+    return 850;
+  }
+}
+
 const state = {
   comics: [],
   selectedComicId: readSavedSelectedComicId(),
@@ -67,14 +77,19 @@ const state = {
   autoSeconds: 5,
   autoPixels: 800,
   autoSettingsOpen: false,
+  keyboardScrollSpeed: readSavedReaderKeySpeed(),
+  keyboardSpeedOpen: false,
   readerNight: false,
   controlsOpen: false,
   activeTag: typeof savedLibraryView.activeTag === "string" ? savedLibraryView.activeTag : "全部",
   activeCategory: typeof savedLibraryView.activeCategory === "string" ? savedLibraryView.activeCategory : "全部",
+  activePageMin: typeof savedLibraryView.activePageMin === "string" ? savedLibraryView.activePageMin : "",
+  activePageMax: typeof savedLibraryView.activePageMax === "string" ? savedLibraryView.activePageMax : "",
   rankingMode: "rating",
   meta: {},
   libraryRoot: "",
   libraryRoots: [],
+  libraryLoaded: false,
   categoryCovers: readSavedCategoryCovers(),
   categoryCoverEditor: "",
   search: "",
@@ -104,6 +119,7 @@ const elements = {
   headerSearch: $("#headerSearch"),
   searchInput: $("#searchInput"),
   tagFilters: $("#tagFilters"),
+  pageRangeFilters: $("#pageRangeFilters"),
   latestList: $("#latestList"),
   homeRanking: $("#homeRanking"),
   homeFolders: $("#homeFolders"),
@@ -121,6 +137,8 @@ const elements = {
   deleteComicButton: $("#deleteComicButton"),
   deletePageButton: $("#deletePageButton"),
   moveComicButton: $("#moveComicButton"),
+  prevComicButton: $("#prevComicButton"),
+  nextComicButton: $("#nextComicButton"),
   readerStage: $("#readerStage"),
   readerCompleteToast: $("#readerCompleteToast"),
   readerDeleteModal: $("#readerDeleteModal"),
@@ -142,6 +160,11 @@ const elements = {
   autoToggle: $("#autoToggle"),
   autoInterval: $("#autoInterval"),
   autoPopover: $("#autoPopover"),
+  keySpeedControl: $("#keySpeedControl"),
+  keySpeedToggle: $("#keySpeedToggle"),
+  keySpeedPopover: $("#keySpeedPopover"),
+  keySpeedRange: $("#keySpeedRange"),
+  keySpeedValue: $("#keySpeedValue"),
   readerThemeToggle: $("#readerThemeToggle"),
   fitToggle: $("#fitToggle"),
   widthControl: $("#widthControl"),
@@ -160,13 +183,30 @@ let scrollSyncFrame = null;
 let readerCompleteTimer = null;
 let completedComicId = "";
 let backgroundProgressTimer = 0;
+let readerKeyboardScrollLockUntil = 0;
+let readerKeyboardScrollFrame = 0;
+let readerKeyboardScrollDirection = 0;
+let readerKeyboardScrollLastTime = 0;
+let libraryPageBeforeSearch = state.libraryPage;
+let reloadLibraryAfterBackgroundSync = false;
 let dataVersion = 0;
 const derivedCache = {
   sortedVersion: -1,
   sortedComics: [],
   rankedVersion: -1,
   rankedMode: "",
-  rankedComics: []
+  rankedComics: [],
+  comicMapVersion: -1,
+  comicMap: new Map(),
+  metaVersion: -1,
+  metaMap: new Map(),
+  tagVersion: -1,
+  tags: [],
+  categoryVersion: -1,
+  categoryOptions: [],
+  collectionVersion: -1,
+  collectionSignature: "",
+  collectionItems: []
 };
 
 function invalidateDerivedCache() {
@@ -203,18 +243,68 @@ async function api(path, options = {}) {
   return data;
 }
 
+function titleAuthorTags(title) {
+  const value = String(title || "").trim();
+  const authorAlias = value.match(/^[【\[]\s*([^【】\[\]()（）]+?)\s*[（(]\s*([^()（）]+?)\s*[）)]\s*[】\]]/u);
+  if (authorAlias) return [authorAlias[1].trim(), authorAlias[2].trim()].filter(Boolean);
+  const author = value.match(/^[【\[]\s*([^【】\[\]]+?)\s*[】\]]/u);
+  return author ? [author[1].trim()].filter(Boolean) : [];
+}
+
+function mergeTags(currentTags, requiredTags) {
+  const result = Array.isArray(currentTags) ? currentTags.map((tag) => String(tag).trim()).filter(Boolean) : [];
+  const known = new Set(result.map((tag) => tag.normalize("NFKC").toLocaleLowerCase()));
+  (requiredTags || []).forEach((tag) => {
+    const value = String(tag || "").trim();
+    const key = value.normalize("NFKC").toLocaleLowerCase();
+    if (!value || known.has(key)) return;
+    result.push(value);
+    known.add(key);
+  });
+  return result;
+}
+
+function comicsById() {
+  if (derivedCache.comicMapVersion !== dataVersion) {
+    derivedCache.comicMap = new Map(state.comics.map((comic) => [comic.id, comic]));
+    derivedCache.comicMapVersion = dataVersion;
+  }
+  return derivedCache.comicMap;
+}
+
+function metaById() {
+  if (derivedCache.metaVersion !== dataVersion) {
+    const comicMap = comicsById();
+    derivedCache.metaMap = new Map(Object.keys(state.meta).map((id) => {
+      const meta = state.meta[id] || {};
+      const comic = comicMap.get(id);
+      return [id, {
+        rating: Math.max(0, Math.min(5, Number(meta.rating) || 0)),
+        tags: mergeTags(Array.isArray(meta.tags) ? meta.tags : [], comic ? titleAuthorTags(comic.title) : []),
+        views: Math.max(0, Math.floor(Number(meta.views) || 0)),
+        description: typeof meta.description === "string" ? meta.description : ""
+      }];
+    }));
+    state.comics.forEach((comic) => {
+      if (derivedCache.metaMap.has(comic.id)) return;
+      derivedCache.metaMap.set(comic.id, {
+        rating: 0,
+        tags: mergeTags([], titleAuthorTags(comic.title)),
+        views: 0,
+        description: ""
+      });
+    });
+    derivedCache.metaVersion = dataVersion;
+  }
+  return derivedCache.metaMap;
+}
+
 function getMeta(id) {
-  const meta = state.meta[id] || {};
-  return {
-    rating: Math.max(0, Math.min(5, Number(meta.rating) || 0)),
-    tags: Array.isArray(meta.tags) ? meta.tags : [],
-    views: Math.max(0, Math.floor(Number(meta.views) || 0)),
-    description: typeof meta.description === "string" ? meta.description : ""
-  };
+  return metaById().get(id) || { rating: 0, tags: [], views: 0, description: "" };
 }
 
 function getSelectedComic() {
-  return state.comics.find((comic) => comic.id === state.selectedComicId);
+  return comicsById().get(state.selectedComicId);
 }
 
 function comicPages(comic) {
@@ -229,11 +319,12 @@ function mergeComic(nextComic) {
   } else {
     state.comics[index] = { ...state.comics[index], ...nextComic };
   }
-  return state.comics.find((comic) => comic.id === nextComic.id);
+  invalidateDerivedCache();
+  return comicsById().get(nextComic.id);
 }
 
 async function ensureComicPages(id = state.selectedComicId) {
-  const comic = state.comics.find((item) => item.id === id);
+  const comic = comicsById().get(id);
   if (!comic) return null;
   if (Array.isArray(comic.pages) && comic.pages.length) return comic;
   const fullComic = await api(`/api/comics/${encodeURIComponent(id)}`);
@@ -303,7 +394,11 @@ function rankedComics() {
 }
 
 function allTags() {
-  return ["全部", ...new Set(state.comics.flatMap((comic) => getMeta(comic.id).tags))];
+  if (derivedCache.tagVersion !== dataVersion) {
+    derivedCache.tags = ["全部", ...new Set(state.comics.flatMap((comic) => getMeta(comic.id).tags))];
+    derivedCache.tagVersion = dataVersion;
+  }
+  return derivedCache.tags;
 }
 
 function categoryParts(category) {
@@ -314,12 +409,16 @@ function categoryParts(category) {
 }
 
 function categoryFilterOptions() {
-  const categories = new Set();
-  state.comics.forEach((comic) => {
-    const parts = categoryParts(comic.category || "未分类");
-    categories.add(parts[0] || "未分类");
-  });
-  return [...categories].sort(naturalSort);
+  if (derivedCache.categoryVersion !== dataVersion) {
+    const categories = new Set();
+    state.comics.forEach((comic) => {
+      const parts = categoryParts(comic.category || "未分类");
+      categories.add(parts[0] || "未分类");
+    });
+    derivedCache.categoryOptions = [...categories].sort(naturalSort);
+    derivedCache.categoryVersion = dataVersion;
+  }
+  return derivedCache.categoryOptions;
 }
 
 function categoryPathOptions() {
@@ -373,16 +472,43 @@ function allCategories() {
   return ["全部", ...categoryFilterOptions()];
 }
 
-function filteredComics() {
+function pageFilterBounds() {
+  const min = Number.parseInt(state.activePageMin, 10);
+  const max = Number.parseInt(state.activePageMax, 10);
+  const hasMin = Number.isFinite(min) && min >= 0;
+  const hasMax = Number.isFinite(max) && max >= 0;
+  if (!hasMin && !hasMax) return null;
+  const lower = hasMin ? min : 0;
+  const upper = hasMax ? max : Infinity;
+  return lower <= upper ? { min: lower, max: upper } : { min: upper, max: lower };
+}
+
+function comicMatchesPageFilter(comic) {
+  const bounds = pageFilterBounds();
+  if (!bounds) return true;
+  const count = Math.max(0, Number(comic.pageCount) || 0);
+  return count >= bounds.min && count <= bounds.max;
+}
+
+function filteredComicsBase() {
   const keyword = state.search.trim().toLowerCase();
+  const needsMeta = state.activeTag !== "全部" || Boolean(keyword);
   return sortedComics().filter((comic) => {
+    const matchesCategory = comicMatchesCategory(comic, state.activeCategory);
+    if (!matchesCategory) return false;
+    if (!needsMeta) return true;
     const meta = getMeta(comic.id);
     const matchesTag = state.activeTag === "全部" || meta.tags.includes(state.activeTag);
+    if (!matchesTag) return false;
+    if (!keyword) return true;
     const category = comic.category || "未分类";
-    const matchesCategory = comicMatchesCategory(comic, state.activeCategory);
     const text = `${comic.title} ${category} ${meta.tags.join(" ")}`.toLowerCase();
-    return matchesTag && matchesCategory && text.includes(keyword);
+    return text.includes(keyword);
   });
+}
+
+function filteredComics() {
+  return filteredComicsBase().filter((comic) => comicMatchesPageFilter(comic));
 }
 
 function groupComicsByCategory(comics) {
@@ -395,15 +521,38 @@ function groupComicsByCategory(comics) {
 }
 
 function libraryPageItems(current, total) {
-  if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1);
+  if (total <= 11) return Array.from({ length: total }, (_, index) => index + 1);
   const pages = new Set([1, total]);
-  for (let page = current - 1; page <= current + 1; page += 1) {
+  const windowSize = 2;
+  const edgeSize = 5;
+  const start = current <= edgeSize ? 2 : current - windowSize;
+  const end = current >= total - edgeSize + 1 ? total - 1 : current + windowSize;
+  for (let page = start; page <= end; page += 1) {
     if (page > 1 && page < total) pages.add(page);
   }
   return [...pages].sort((a, b) => a - b).flatMap((page, index, sorted) => {
     if (index === 0 || page === sorted[index - 1] + 1) return [page];
     return ["...", page];
   });
+}
+
+function pagerHtml({ current, total, target }) {
+  const pageAttr = `data-${target}-page`;
+  return `
+    <button type="button" ${pageAttr}="${current - 1}" ${current === 1 ? "disabled" : ""}>上一页</button>
+    ${libraryPageItems(current, total).map((page) => {
+      if (page === "...") return "<span>...</span>";
+      return `<button type="button" class="${page === current ? "active" : ""}" ${pageAttr}="${page}">${page}</button>`;
+    }).join("")}
+    <button type="button" ${pageAttr}="${current + 1}" ${current === total ? "disabled" : ""}>下一页</button>
+    <form class="pager-jump" data-pager-jump="${target}" data-pager-total="${total}">
+      <label>
+        <span>跳到</span>
+        <input type="number" min="1" max="${total}" value="${current}" inputmode="numeric" aria-label="跳转页码">
+      </label>
+      <button type="submit">跳转</button>
+    </form>
+  `;
 }
 
 function setStatus(message, tone = "") {
@@ -496,6 +645,12 @@ async function pollSyncProgress() {
       setStatus(progress.status || "正在同步本地漫画目录...");
     } else {
       stopBackgroundProgressPolling();
+      if (reloadLibraryAfterBackgroundSync) {
+        reloadLibraryAfterBackgroundSync = false;
+        await loadLibrary();
+        setStatus(`同步完成：${state.comics.length} 本漫画`, "ok");
+        setTimeout(() => renderSyncProgress(null), 1200);
+      }
     }
     return progress;
   } catch {
@@ -550,6 +705,8 @@ function persistLibraryView() {
     localStorage.setItem(LIBRARY_VIEW_STORAGE_KEY, JSON.stringify({
       activeCategory: state.activeCategory,
       activeTag: state.activeTag,
+      activePageMin: state.activePageMin,
+      activePageMax: state.activePageMax,
       libraryPage: state.libraryPage
     }));
   } catch {
@@ -617,8 +774,42 @@ function setView(view) {
   if (view !== "reader") window.scrollTo(0, 0);
 }
 
-function navigateToView(view) {
-  const nextHash = `#${view}`;
+function routeHash(view, params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value) !== "") query.set(key, String(value));
+  });
+  const suffix = query.toString();
+  return `#${view}${suffix ? `?${suffix}` : ""}`;
+}
+
+function libraryRouteParams() {
+  return {
+    category: state.activeCategory === "全部" ? "" : state.activeCategory,
+    tag: state.activeTag === "全部" ? "" : state.activeTag,
+    q: state.search.trim(),
+    page: state.libraryPage,
+    min: state.activePageMin,
+    max: state.activePageMax
+  };
+}
+
+function readerRouteParams() {
+  return {
+    id: state.selectedComicId,
+    collection: state.selectedCollectionKey
+  };
+}
+
+function parseHashRoute() {
+  const raw = location.hash.replace(/^#/, "");
+  const [rawView, rawQuery = ""] = raw.split("?");
+  const view = ["home", "library", "ranking", "categories", "detail", "reader"].includes(rawView) ? rawView : "home";
+  return { view, params: new URLSearchParams(rawQuery) };
+}
+
+function navigateToView(view, params = {}) {
+  const nextHash = routeHash(view, params);
   if (location.hash !== nextHash) {
     history.pushState(null, "", nextHash);
   }
@@ -626,8 +817,37 @@ function navigateToView(view) {
 }
 
 function syncViewFromHash() {
-  const value = location.hash.replace("#", "");
-  const view = ["home", "library", "ranking", "categories", "detail", "reader"].includes(value) ? value : "home";
+  const { view, params } = parseHashRoute();
+  if (view === "library") {
+    const urlSearch = params.get("q");
+    state.search = urlSearch || "";
+    elements.searchInput.value = state.search;
+    const category = params.get("category");
+    state.activeCategory = category !== null ? category || "全部" : "全部";
+    const tag = params.get("tag");
+    state.activeTag = tag !== null ? tag || "全部" : "全部";
+    const page = Math.floor(Number(params.get("page")) || 0);
+    state.libraryPage = page > 0 ? page : 1;
+    const min = params.get("min");
+    const max = params.get("max");
+    state.activePageMin = min || "";
+    state.activePageMax = max || "";
+  }
+  if (view === "detail" || view === "reader") {
+    const comicId = params.get("id");
+    const collectionKey = params.get("collection");
+    if (comicId) {
+      state.selectedComicId = comicId;
+      state.selectedCollectionKey = collectionKey || "";
+      persistSelectedComic();
+      persistSelectedCollection();
+    } else if (collectionKey) {
+      state.selectedCollectionKey = collectionKey;
+      state.selectedComicId = "";
+      persistSelectedCollection();
+      persistSelectedComic();
+    }
+  }
   setView(view);
 }
 
@@ -662,15 +882,35 @@ function seriesTitleFor(comic) {
   if (!title) return "";
   const cleaned = title
     .replace(/\s+/g, " ")
-    .replace(/[【\[](?:中国翻訳|中国翻译|中文|汉化|漢化|DL版|無修正|无修正|完结?|完)[^\]】]*[】\]]/gi, "")
+    .replace(/\s*[【\[](?=[^\]】]*(?:中国翻訳|中国翻译|中文|汉化|漢化|翻译|翻訳|机翻|機翻|DL版|無修正|无修正|完结?|完)[^\]】]*[】\]])[^\]】]*[】\]]/gi, "")
+    .replace(/\s*[【\[](?=[^\]】]*(?:中国翻訳|中国翻译|中文|汉化|漢化|翻译|翻訳|机翻|機翻|DL版|無修正|无修正|完结?|完)[^\]】]*$)[^\]】]*$/gi, "")
     .trim();
-  const workTitle = cleaned.replace(/^[【\[][^】\]]+[】\]]\s*/u, "").trim();
+  const stripTrailingBracketNotes = (value) => {
+    let text = String(value || "").trim();
+    for (let index = 0; index < 8; index += 1) {
+      const next = text.replace(/\s*[【\[][^\]】]{1,80}[】\]]\s*$/u, "").trim();
+      if (next === text) break;
+      text = next;
+    }
+    return text;
+  };
+  const workTitle = stripTrailingBracketNotes(cleaned.replace(/^[【\[][^】\]]+[】\]]\s*/u, ""));
   const normalizeBase = (value) => value
     .normalize("NFKC")
     .replace(/(?:\.|…|‥|⋯){2,}/gu, "……")
     .replace(/[~～]/gu, "〜")
+    .replace(/\s*[【\[][^\]】]{1,80}[】\]]\s*$/gu, "")
+    .split(/[｜丨|]/u)[0]
+    .split(/[〜]/u)[0]
+    .replace(/\s*[【\[\(（]\s*\d{1,4}(?:\.\d+)?\s*[-–—~〜～]\s*\d{1,4}(?:\.\d+)?\s*[\]】\)）]\s*$/u, "")
+    .replace(/\s*[（(]\s*(?:オリジナル|original)\s*[）)]\s*$/iu, "")
+    .replace(/\s*[（(][^()（）]*[\u4e00-\u9fff][^()（）]*[）)]\s*$/u, "")
+    .replace(/\s*[（(][^()（）]*[）)]\s*$/u, "")
+    .replace(/\s*(?:vol\.?|volume)\s*\d+(?:\.\d+)?$/iu, "")
+    .replace(/\s*(?:vol\.?|volume)$/iu, "")
     .trim()
     .replace(/[!！?？]+$/u, "")
+    .replace(/[【\[\(（]+$/u, "")
     .replace(/[：:_\s-]+$/u, "")
     .trim();
   const rangeMatch = workTitle.match(/^(.{2,}?)\s*[!！]?\s*[（(]\s*\d{1,4}(?:\.\d+)?\s*[-–—~〜～]\s*\d{1,4}(?:\.\d+)?\s*[)）](?:\s*合集)?(?:\s*[【\[].*)?$/u);
@@ -678,7 +918,7 @@ function seriesTitleFor(comic) {
     const base = normalizeBase(rangeMatch[1]);
     return base.length >= 2 ? base : title;
   }
-  const match = workTitle.match(/^(.{2,}?)\s*(?:第?\s*\d{1,4}(?:\.\d+)?(?:\s*[-–—]\s*\d{1,4}(?:\.\d+)?)?\s*(?:话|話|回|集|卷|章|册|頁|页)?|0*\d{1,4}(?:\.\d+)?)(?=$|\s|[｜|〜～~—–\-_:：])(?:[\s｜|〜～~—–\-_:：]+.*)?$/u);
+  const match = workTitle.match(/^(.{2,}?)\s*[【\[\(（]?\s*(?:第?\s*\d{1,4}(?:\.\d+)?(?:\s*[-–—~〜～]\s*\d{1,4}(?:\.\d+)?)?\s*(?:话|話|回|集|卷|章|册|頁|页)?|0*\d{1,4}(?:\.\d+)?)(?=$|\s|[\]】\)）｜丨|+〜～~—–\-_:：])(?:[\]\)）】\s｜丨|+〜～~—–\-_:：]+.*)?$/u);
   if (!match) {
     const base = normalizeBase(workTitle);
     return base.length >= 2 ? base : title;
@@ -695,6 +935,7 @@ function seriesAuthorKeyFor(comic) {
   if (!match) return "";
   return match[1]
     .replace(/\s+/g, " ")
+    .replace(/\s*[（(][^()（）]+[）)]\s*$/u, "")
     .trim()
     .toLocaleLowerCase();
 }
@@ -707,7 +948,7 @@ function chapterNumberFor(comic) {
   const title = String(comic?.title || "")
     .trim()
     .replace(/^[【\[][^】\]]+[】\]]\s*/u, "");
-  const matches = [...title.matchAll(/(?:第\s*)?(\d{1,4}(?:\.\d+)?)\s*(?:话|話|回|集|卷|章|册|頁|页)?/gu)];
+  const matches = [...title.matchAll(/(?:第\s*|vol\.?\s*|volume\s*)?(\d{1,4}(?:\.\d+)?)\s*(?:话|話|回|集|卷|章|册|頁|页)?/giu)];
   if (!matches.length) return null;
   return Number(matches[matches.length - 1][1]);
 }
@@ -754,7 +995,7 @@ function buildCollectionItems(comics) {
     const title = hasFolderGroup ? folderParts[folderParts.length - 1] : seriesTitle;
     const key = hasFolderGroup
       ? collectionKeyFor(folderCategory, `folder:${folderCategory}`)
-      : collectionKeyFor(category, seriesKey);
+      : collectionKeyFor("series", seriesKey);
     if (!groups.has(key)) {
       groups.set(key, {
         key,
@@ -764,7 +1005,11 @@ function buildCollectionItems(comics) {
         groupType: hasFolderGroup ? "folder" : "series"
       });
     }
-    groups.get(key).comics.push(comic);
+    const group = groups.get(key);
+    group.comics.push(comic);
+    if (!hasFolderGroup && !categoryParts(group.category).includes(category) && group.category !== category) {
+      group.category = `${group.category} / ${category}`;
+    }
   });
 
   return [...groups.values()]
@@ -776,6 +1021,21 @@ function buildCollectionItems(comics) {
       return { type: "collection", ...group, comics: sorted, sortComic: latestComic };
     })
     .sort((a, b) => compareComicsByUpdated(a.sortComic, b.sortComic));
+}
+
+function collectionItemsFor(comics) {
+  const signature = comics.map((comic) => comic.id).join("|");
+  if (
+    derivedCache.collectionVersion === dataVersion
+    && derivedCache.collectionSignature === signature
+  ) {
+    return derivedCache.collectionItems;
+  }
+  const items = buildCollectionItems(comics);
+  derivedCache.collectionVersion = dataVersion;
+  derivedCache.collectionSignature = signature;
+  derivedCache.collectionItems = items;
+  return items;
 }
 
 function getSelectedCollection() {
@@ -801,6 +1061,63 @@ function getSelectedCollection() {
     // Ignore stale or malformed collection keys from older builds.
   }
   return null;
+}
+
+function sortedCollectionComics(collection) {
+  if (!collection) return [];
+  return [...collection.comics].sort((a, b) => {
+    const result = state.collectionSort === "updated"
+      ? comicUpdatedTime(a) - comicUpdatedTime(b) || naturalSort(a.title, b.title)
+      : naturalSort(a.title, b.title);
+    return state.collectionSortDirection === "desc" ? -result : result;
+  });
+}
+
+function readerComicQueue() {
+  const currentId = state.selectedComicId;
+  const collection = getSelectedCollection();
+  if (collection && collection.comics.some((comic) => comic.id === currentId)) {
+    return sortedCollectionComics(collection);
+  }
+
+  const filtered = filteredComics();
+  if (filtered.some((comic) => comic.id === currentId)) return filtered;
+  return sortedComics();
+}
+
+function readerComicNeighbor(offset) {
+  const queue = readerComicQueue();
+  const currentIndex = queue.findIndex((comic) => comic.id === state.selectedComicId);
+  const targetIndex = currentIndex + offset;
+  return {
+    currentIndex,
+    total: queue.length,
+    target: currentIndex >= 0 && targetIndex >= 0 && targetIndex < queue.length ? queue[targetIndex] : null
+  };
+}
+
+function syncReaderComicNav() {
+  const queue = readerComicQueue();
+  const currentIndex = queue.findIndex((comic) => comic.id === state.selectedComicId);
+  if (elements.prevComicButton) elements.prevComicButton.disabled = currentIndex <= 0;
+  if (elements.nextComicButton) elements.nextComicButton.disabled = currentIndex < 0 || currentIndex >= queue.length - 1;
+}
+
+async function switchReaderComic(offset) {
+  const { target } = readerComicNeighbor(offset);
+  if (!target) return;
+  if (state.selectedComicId !== target.id) completedComicId = "";
+  state.selectedComicId = target.id;
+  persistSelectedComic();
+  state.pageIndex = 0;
+  state.detailPage = 1;
+  state.readerScrollEnd = READER_SCROLL_WINDOW;
+  state.controlsOpen = true;
+  await ensureComicPages(target.id);
+  await incrementViews();
+  history.replaceState(null, "", routeHash("reader", readerRouteParams()));
+  renderReader();
+  window.scrollTo(0, 0);
 }
 
 function comicCard(comic) {
@@ -945,6 +1262,7 @@ function autoAppendReaderScrollPages() {
 
 function syncScrollPageIndex() {
   if (state.view !== "reader" || state.mode !== "scroll") return;
+  if (Date.now() < readerKeyboardScrollLockUntil) return;
   const comic = getSelectedComic();
   if (!comic) return;
   const pages = comicPages(comic);
@@ -972,10 +1290,25 @@ function syncScrollPageIndex() {
   }
 }
 
+function pageRangeFormHtml() {
+  return `
+    <form class="page-range-form" data-page-range-form>
+      <span>页数</span>
+      <input type="number" min="0" inputmode="numeric" name="minPages" value="${escapeHTML(state.activePageMin)}" placeholder="最小">
+      <span>-</span>
+      <input type="number" min="0" inputmode="numeric" name="maxPages" value="${escapeHTML(state.activePageMax)}" placeholder="最大">
+      <button type="submit">筛选</button>
+      <button type="button" data-page-range-clear ${state.activePageMin || state.activePageMax ? "" : "disabled"}>清空</button>
+    </form>
+  `;
+}
+
 function renderTags() {
   elements.tagFilters.innerHTML = allCategories()
     .map((category) => `<button class="chip ${category === state.activeCategory ? "active" : ""}" type="button" data-category="${escapeHTML(category)}">${escapeHTML(category)}</button>`)
     .join("");
+
+  elements.pageRangeFilters.innerHTML = "";
 
   elements.homeFolders.innerHTML = allCategories()
     .filter((category) => category !== "全部")
@@ -1005,12 +1338,17 @@ function renderHome() {
 }
 
 function renderLibrary() {
+  if (!state.libraryLoaded) {
+    elements.resultCount.textContent = "正在加载漫画库...";
+    elements.comicGrid.innerHTML = emptyBlock("正在加载漫画库", "请稍等，正在读取本地索引。");
+    elements.libraryPager.innerHTML = "";
+    return;
+  }
   const list = filteredComics();
-  let displayList = buildCollectionItems(list);
-  const allTagLabel = allTags()[0];
-  const isTagResult = state.activeTag !== allTagLabel;
-  const allCategoryLabel = allCategories()[0];
-  const isAllCategory = state.activeCategory === allCategoryLabel;
+  let displayList = collectionItemsFor(list);
+  const isTagResult = state.activeTag !== "全部";
+  const isSearchResult = Boolean(state.search.trim());
+  const isAllCategory = state.activeCategory === "全部";
   if (isAllCategory && !isTagResult) {
     displayList = [...displayList].sort((a, b) => compareComicsByUpdated(a.sortComic, b.sortComic));
   }
@@ -1019,31 +1357,33 @@ function renderLibrary() {
     : isAllCategory
       ? `${list.length} 本漫画`
       : `分类：${state.activeCategory} · ${list.length} 本漫画`;
-  const pageSize = isTagResult ? TAG_RESULT_PAGE_SIZE : isAllCategory ? LIBRARY_PAGE_SIZE : CATEGORY_PAGE_SIZE;
+  const pageSize = isSearchResult ? SEARCH_RESULT_PAGE_SIZE : isTagResult ? TAG_RESULT_PAGE_SIZE : isAllCategory ? LIBRARY_PAGE_SIZE : CATEGORY_PAGE_SIZE;
   const shouldPaginate = true;
   const totalPages = Math.max(1, Math.ceil(displayList.length / pageSize));
   state.libraryPage = Math.max(1, Math.min(state.libraryPage, totalPages));
   persistLibraryView();
+  if (state.view === "library") history.replaceState(null, "", routeHash("library", libraryRouteParams()));
   const start = (state.libraryPage - 1) * pageSize;
   const pageDisplayList = shouldPaginate ? displayList.slice(start, start + pageSize) : displayList;
 
   if (isTagResult || isAllCategory) {
     elements.comicGrid.innerHTML = pageDisplayList.length ? `
       <section class="tag-result-group">
+        <div class="library-category-heading library-filter-heading">
+          <h2 class="category-breadcrumb">${escapeHTML(isTagResult ? state.activeTag : "全部")}</h2>
+          <div class="library-category-actions">
+            ${pageRangeFormHtml()}
+          </div>
+        </div>
         <div class="tag-result-grid">
           ${pageDisplayList.map(directoryItemCard).join("")}
         </div>
       </section>
     ` : emptyBlock("没有匹配结果", "换个关键词、标签或分类试试。");
 
-    elements.libraryPager.innerHTML = displayList.length > pageSize ? `
-      <button type="button" data-library-page="${state.libraryPage - 1}" ${state.libraryPage === 1 ? "disabled" : ""}>上一页</button>
-      ${libraryPageItems(state.libraryPage, totalPages).map((page) => {
-        if (page === "...") return "<span>...</span>";
-        return `<button type="button" class="${page === state.libraryPage ? "active" : ""}" data-library-page="${page}">${page}</button>`;
-      }).join("")}
-      <button type="button" data-library-page="${state.libraryPage + 1}" ${state.libraryPage === totalPages ? "disabled" : ""}>下一页</button>
-    ` : "";
+    elements.libraryPager.innerHTML = displayList.length > pageSize
+      ? pagerHtml({ current: state.libraryPage, total: totalPages, target: "library" })
+      : "";
     return;
   }
 
@@ -1051,7 +1391,7 @@ function renderLibrary() {
     ? [...groupComicsByCategory(list).entries()]
       .sort(([a], [b]) => naturalSort(a, b))
       .map(([category, comics]) => {
-        const items = buildCollectionItems(comics).slice(0, CATEGORY_PREVIEW_SIZE);
+        const items = collectionItemsFor(comics).slice(0, CATEGORY_PREVIEW_SIZE);
         return [category, items, comics.length];
       })
     : [[state.activeCategory, pageDisplayList, list.length]];
@@ -1061,6 +1401,7 @@ function renderLibrary() {
       <div class="library-category-heading">
         <h2 class="category-breadcrumb">${categoryBreadcrumb(category)}</h2>
         <div class="library-category-actions">
+          ${!isAllCategory ? pageRangeFormHtml() : ""}
           <span>${isAllCategory && total > items.length ? `${items.length} / ${total}` : total}</span>
           ${isAllCategory && total > items.length ? `<button type="button" data-category-more="${escapeHTML(category)}">更多</button>` : ""}
         </div>
@@ -1071,14 +1412,9 @@ function renderLibrary() {
     </section>
   `).join("") || emptyBlock("没有匹配结果", "换个关键词、标签或分类试试。");
 
-  elements.libraryPager.innerHTML = !isAllCategory && displayList.length > CATEGORY_PAGE_SIZE ? `
-    <button type="button" data-library-page="${state.libraryPage - 1}" ${state.libraryPage === 1 ? "disabled" : ""}>上一页</button>
-    ${libraryPageItems(state.libraryPage, totalPages).map((page) => {
-      if (page === "...") return "<span>...</span>";
-      return `<button type="button" class="${page === state.libraryPage ? "active" : ""}" data-library-page="${page}">${page}</button>`;
-    }).join("")}
-    <button type="button" data-library-page="${state.libraryPage + 1}" ${state.libraryPage === totalPages ? "disabled" : ""}>下一页</button>
-  ` : "";
+  elements.libraryPager.innerHTML = !isAllCategory && displayList.length > CATEGORY_PAGE_SIZE
+    ? pagerHtml({ current: state.libraryPage, total: totalPages, target: "library" })
+    : "";
 }
 
 function renderRanking() {
@@ -1115,14 +1451,9 @@ function renderRanking() {
     pager.setAttribute("aria-label", "排行榜分页");
     elements.rankingList.insertAdjacentElement("afterend", pager);
   }
-  pager.innerHTML = ranked.length > RANKING_PAGE_SIZE ? `
-    <button type="button" data-ranking-page="${state.rankingPage - 1}" ${state.rankingPage === 1 ? "disabled" : ""}>上一页</button>
-    ${libraryPageItems(state.rankingPage, totalPages).map((page) => {
-      if (page === "...") return "<span>...</span>";
-      return `<button type="button" class="${page === state.rankingPage ? "active" : ""}" data-ranking-page="${page}">${page}</button>`;
-    }).join("")}
-    <button type="button" data-ranking-page="${state.rankingPage + 1}" ${state.rankingPage === totalPages ? "disabled" : ""}>下一页</button>
-  ` : "";
+  pager.innerHTML = ranked.length > RANKING_PAGE_SIZE
+    ? pagerHtml({ current: state.rankingPage, total: totalPages, target: "ranking" })
+    : "";
 }
 
 function renderCategories() {
@@ -1188,12 +1519,7 @@ function renderCollectionDetail(collection) {
   const lead = collection.comics[0];
   const totalPages = collection.comics.reduce((sum, comic) => sum + (Number(comic.pageCount) || 0), 0);
   const label = collection.groupType === "folder" ? "文件夹" : "合集";
-  const sortedComics = [...collection.comics].sort((a, b) => {
-    const result = state.collectionSort === "updated"
-      ? comicUpdatedTime(a) - comicUpdatedTime(b) || naturalSort(a.title, b.title)
-      : naturalSort(a.title, b.title);
-    return state.collectionSortDirection === "desc" ? -result : result;
-  });
+  const sortedComics = sortedCollectionComics(collection);
   elements.comicDetail.innerHTML = `
     <div class="detail-shell collection-detail-shell">
       <nav class="breadcrumb" aria-label="当前位置">
@@ -1307,6 +1633,7 @@ function renderDetail() {
               <dd class="category-action-row">
                 <span>${escapeHTML(comic.category || "未分类")}</span>
                 <button class="secondary-button detail-move-button" type="button" data-open-move-comic popovertarget="readerMoveModal">移动</button>
+                <button class="secondary-button detail-delete-button" type="button" data-open-delete-comic popovertarget="readerDeleteModal">删除</button>
               </dd>
             </div>
             <div><dt>页数：</dt><dd>${comic.pageCount}P</dd></div>
@@ -1366,7 +1693,11 @@ function renderDetail() {
               </dd>
             </div>
           </dl>
-          <button class="start-reading-button" id="readButton" type="button">开始阅读</button>
+          <div class="detail-main-actions">
+            <button class="start-reading-button" id="readButton" type="button">开始阅读</button>
+            <button class="secondary-button quick-tag-button ${tags.includes("待看") ? "active" : ""}" type="button" data-quick-tag="待看">待看</button>
+            <button class="secondary-button quick-tag-button ${tags.includes("收藏") ? "active" : ""}" type="button" data-quick-tag="收藏">收藏</button>
+          </div>
         </section>
 
       </section>
@@ -1385,15 +1716,11 @@ function renderDetail() {
       </section>
 
       <nav class="detail-pager" aria-label="详情页分页">
-        <button type="button" data-detail-page="${Math.max(1, state.detailPage - 1)}" ${state.detailPage === 1 ? "disabled" : ""}>上一页</button>
-        ${libraryPageItems(state.detailPage, totalPages).map((page) => {
-          if (page === "...") return "<span>...</span>";
-          return `<button type="button" class="${page === state.detailPage ? "active" : ""}" data-detail-page="${page}">${page}</button>`;
-        }).join("")}
-        <button type="button" data-detail-page="${Math.min(totalPages, state.detailPage + 1)}" ${state.detailPage === totalPages ? "disabled" : ""}>下一页</button>
+        ${pagerHtml({ current: state.detailPage, total: totalPages, target: "detail" })}
       </nav>
     </div>
   `;
+  elements.readerDeleteName.textContent = comic.title;
   renderMoveModal(comic);
 }
 
@@ -1414,6 +1741,8 @@ function renderReader() {
     elements.progressBar.style.width = "0%";
     if (elements.prevPage) elements.prevPage.disabled = true;
     if (elements.nextPage) elements.nextPage.disabled = true;
+    if (elements.prevComicButton) elements.prevComicButton.disabled = true;
+    if (elements.nextComicButton) elements.nextComicButton.disabled = true;
     return;
   }
 
@@ -1426,6 +1755,7 @@ function renderReader() {
     updateReaderProgress(comic);
     if (elements.prevPage) elements.prevPage.disabled = true;
     if (elements.nextPage) elements.nextPage.disabled = true;
+    syncReaderComicNav();
     return;
   }
 
@@ -1448,6 +1778,9 @@ function renderReader() {
       : `自动：${state.autoSeconds}s`
     : "自动：关";
   elements.autoPopover.hidden = !(state.autoSettingsOpen && state.autoPlay);
+  syncKeySpeedControl();
+  elements.keySpeedControl.hidden = state.mode !== "scroll";
+  elements.keySpeedPopover.hidden = state.mode !== "scroll" || !state.keyboardSpeedOpen;
   if (state.mode === "scroll") {
     elements.autoInterval.min = "100";
     elements.autoInterval.max = "2400";
@@ -1504,6 +1837,7 @@ function renderReader() {
   if (state.mode === "single") requestAnimationFrame(checkReaderCompletion);
   if (elements.prevPage) elements.prevPage.disabled = state.pageIndex === 0;
   if (elements.nextPage) elements.nextPage.disabled = state.pageIndex === pages.length - 1;
+  syncReaderComicNav();
 }
 
 function stopAutoPlay() {
@@ -1719,7 +2053,7 @@ async function openComic(id) {
   state.pageIndex = 0;
   state.detailPage = 1;
   state.readerScrollEnd = READER_SCROLL_WINDOW;
-  history.pushState({ comicId: id }, "", "#detail");
+  history.pushState({ comicId: id }, "", routeHash("detail", { id }));
   setView("detail");
   await ensureComicPages(id);
   renderDetail();
@@ -1732,7 +2066,7 @@ function openCollection(key) {
   state.pageIndex = 0;
   state.detailPage = 1;
   persistSelectedComic();
-  navigateToView("detail");
+  navigateToView("detail", { collection: key });
 }
 
 async function loadLibrary({ refresh = false } = {}) {
@@ -1740,6 +2074,7 @@ async function loadLibrary({ refresh = false } = {}) {
   state.libraryRoot = data.libraryRoot || "";
   state.libraryRoots = data.libraryRoots || (state.libraryRoot ? [state.libraryRoot] : []);
   state.comics = data.comics || [];
+  state.libraryLoaded = true;
   state.meta = data.metadata || {};
   const serverCategoryCovers = data.categoryCovers && typeof data.categoryCovers === "object"
     ? data.categoryCovers
@@ -1814,29 +2149,40 @@ async function syncLibrary() {
     setStatus("请先添加漫画根目录。", "error");
     return;
   }
-  const data = await withSyncProgress({
-    status: "正在同步本地漫画目录...",
-    detail: "正在读取漫画根目录...",
-    task: () => api("/api/sync", { method: "POST" }),
-    completionDetail: (result) => `共发现 ${result.comics?.length || 0} 本漫画`
-  });
-  state.libraryRoot = data.libraryRoot || "";
-  state.libraryRoots = data.libraryRoots || [];
-  state.comics = data.comics || [];
-  state.meta = data.metadata || {};
-  invalidateDerivedCache();
-  const currentComicStillExists = state.comics.some((comic) => comic.id === state.selectedComicId);
-  if (!currentComicStillExists && state.view !== "detail" && state.view !== "reader") {
-    state.selectedComicId = state.comics[0]?.id || "";
-    persistSelectedComic();
+  setStatus("正在启动后台同步...");
+  renderSyncProgress({ active: true, percent: 0, label: "准备同步", detail: "正在读取漫画根目录..." });
+  setSyncControlsDisabled(true);
+  try {
+    const data = await api("/api/sync", { method: "POST" });
+    state.libraryRoot = data.libraryRoot || "";
+    state.libraryRoots = data.libraryRoots || [];
+    state.comics = data.comics || [];
+    state.libraryLoaded = true;
+    state.meta = data.metadata || {};
+    invalidateDerivedCache();
+    const currentComicStillExists = state.comics.some((comic) => comic.id === state.selectedComicId);
+    if (!currentComicStillExists && state.view !== "detail" && state.view !== "reader") {
+      state.selectedComicId = state.comics[0]?.id || "";
+      persistSelectedComic();
+    }
+    if ((state.view === "detail" || state.view === "reader") && state.selectedComicId) {
+      await ensureComicPages(state.selectedComicId);
+    }
+    renderRootList();
+    renderAll();
+    if (state.view === "library") history.replaceState(null, "", routeHash("library", libraryRouteParams()));
+    if (data.scanning) {
+      reloadLibraryAfterBackgroundSync = true;
+      startBackgroundProgressPolling();
+      setStatus(`后台同步中，当前先显示 ${state.comics.length} 本漫画`, "ok");
+    } else {
+      renderSyncProgress({ active: true, percent: 100, label: "同步完成", detail: `共发现 ${state.comics.length} 本漫画` });
+      setStatus(`同步完成：${state.comics.length} 本漫画`, "ok");
+      setTimeout(() => renderSyncProgress(null), 1200);
+    }
+  } finally {
+    setSyncControlsDisabled(false);
   }
-  if ((state.view === "detail" || state.view === "reader") && state.selectedComicId) {
-    await ensureComicPages(state.selectedComicId);
-  }
-  renderRootList();
-  renderAll();
-  setStatus(`同步完成：${state.comics.length} 本漫画`, "ok");
-  setTimeout(() => renderSyncProgress(null), 1200);
 }
 
 async function persistMeta(id, nextMeta) {
@@ -1883,6 +2229,18 @@ async function addTag(value) {
   const meta = getMeta(comic.id);
   state.tagEditorOpen = false;
   await persistMeta(comic.id, { ...meta, tags: [...new Set([...meta.tags, tag])] });
+}
+
+async function toggleQuickTag(tag) {
+  const comic = getSelectedComic();
+  if (!comic || !tag) return;
+  const meta = getMeta(comic.id);
+  const exists = meta.tags.includes(tag);
+  await persistMeta(comic.id, {
+    ...meta,
+    tags: exists ? meta.tags.filter((item) => item !== tag) : [...meta.tags, tag]
+  });
+  renderDetail();
 }
 
 async function removeTag(tag) {
@@ -1941,15 +2299,30 @@ elements.settingsToggle.addEventListener("click", () => {
 
 elements.headerSearch.addEventListener("submit", (event) => {
   event.preventDefault();
-  state.search = elements.searchInput.value;
+  const nextSearch = elements.searchInput.value;
+  if (!state.search.trim() && nextSearch.trim()) libraryPageBeforeSearch = state.libraryPage;
+  state.search = nextSearch;
   state.libraryPage = 1;
-  renderLibrary();
-  location.hash = "library";
+  history.pushState(null, "", routeHash("library", libraryRouteParams()));
+  setView("library");
 });
 
 elements.searchInput.addEventListener("input", () => {
-  state.search = elements.searchInput.value;
-  state.libraryPage = 1;
+  const previousSearch = state.search.trim();
+  const nextSearch = elements.searchInput.value;
+  const hasNextSearch = Boolean(nextSearch.trim());
+  if (!previousSearch && hasNextSearch) {
+    libraryPageBeforeSearch = state.libraryPage;
+    state.libraryPage = 1;
+  } else if (previousSearch && !hasNextSearch) {
+    state.libraryPage = libraryPageBeforeSearch;
+  } else if (hasNextSearch) {
+    state.libraryPage = 1;
+  }
+  state.search = nextSearch;
+  if (state.view === "library") {
+    history.replaceState(null, "", routeHash("library", libraryRouteParams()));
+  }
   renderLibrary();
 });
 
@@ -1960,6 +2333,29 @@ elements.tagFilters.addEventListener("click", (event) => {
   state.activeTag = allTags()[0];
   state.libraryPage = 1;
   persistLibraryView();
+  if (state.view === "library") history.replaceState(null, "", routeHash("library", libraryRouteParams()));
+  renderAll();
+});
+
+document.addEventListener("submit", (event) => {
+  const form = event.target.closest("[data-page-range-form]");
+  if (!form) return;
+  event.preventDefault();
+  state.activePageMin = String(form.elements.minPages?.value || "").trim();
+  state.activePageMax = String(form.elements.maxPages?.value || "").trim();
+  state.libraryPage = 1;
+  persistLibraryView();
+  if (state.view === "library") history.replaceState(null, "", routeHash("library", libraryRouteParams()));
+  renderAll();
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("[data-page-range-clear]")) return;
+  state.activePageMin = "";
+  state.activePageMax = "";
+  state.libraryPage = 1;
+  persistLibraryView();
+  if (state.view === "library") history.replaceState(null, "", routeHash("library", libraryRouteParams()));
   renderAll();
 });
 
@@ -1968,6 +2364,7 @@ elements.libraryPager.addEventListener("click", (event) => {
   if (!button || button.disabled) return;
   state.libraryPage = Number(button.dataset.libraryPage);
   persistLibraryView();
+  history.replaceState(null, "", routeHash("library", libraryRouteParams()));
   renderLibrary();
   document.querySelector("#libraryView .section-title")?.scrollIntoView({ block: "start" });
 });
@@ -1982,7 +2379,8 @@ elements.comicGrid.addEventListener("click", (event) => {
   state.libraryPage = 1;
   persistLibraryView();
   renderAll();
-  location.hash = "library";
+  history.pushState(null, "", routeHash("library", libraryRouteParams()));
+  setView("library");
   document.querySelector("#libraryView .section-title")?.scrollIntoView({ block: "start" });
 });
 
@@ -2047,14 +2445,42 @@ document.addEventListener("click", (event) => {
   document.querySelector("#rankingView .section-title")?.scrollIntoView({ block: "start" });
 });
 
+document.addEventListener("submit", (event) => {
+  const form = event.target.closest("[data-pager-jump]");
+  if (!form) return;
+  event.preventDefault();
+  const total = Math.max(1, Number(form.dataset.pagerTotal) || 1);
+  const input = form.querySelector("input");
+  const page = Math.max(1, Math.min(total, Math.floor(Number(input?.value) || 1)));
+  const target = form.dataset.pagerJump;
+
+  if (target === "library") {
+    state.libraryPage = page;
+    persistLibraryView();
+    history.replaceState(null, "", routeHash("library", libraryRouteParams()));
+    renderLibrary();
+    document.querySelector("#libraryView .section-title")?.scrollIntoView({ block: "start" });
+  } else if (target === "ranking") {
+    state.rankingPage = page;
+    renderRanking();
+    document.querySelector("#rankingView .section-title")?.scrollIntoView({ block: "start" });
+  } else if (target === "detail") {
+    state.detailPage = page;
+    renderDetail();
+    document.querySelector("#detailView .detail-shell")?.scrollIntoView({ block: "start" });
+  }
+});
+
 elements.homeFolders.addEventListener("click", (event) => {
   const link = event.target.closest("[data-home-category]");
   if (!link) return;
+  event.preventDefault();
   state.activeTag = "全部";
   state.activeCategory = link.dataset.homeCategory;
   state.libraryPage = 1;
   persistLibraryView();
-  renderAll();
+  history.pushState(null, "", routeHash("library", libraryRouteParams()));
+  setView("library");
 });
 
 document.addEventListener("click", (event) => {
@@ -2101,6 +2527,7 @@ elements.comicDetail.addEventListener("click", async (event) => {
     const detailPageButton = event.target.closest("[data-detail-page]");
     const thumb = event.target.closest("[data-page-index]");
     const ratingStar = event.target.closest("[data-rating-star]");
+    const quickTagButton = event.target.closest("[data-quick-tag]");
 
     if (collectionSortButton) {
       state.collectionSort = collectionSortButton.dataset.collectionSort;
@@ -2121,8 +2548,11 @@ elements.comicDetail.addEventListener("click", async (event) => {
       elements.searchInput.value = "";
       state.libraryPage = 1;
       persistLibraryView();
-      renderAll();
-      location.hash = "library";
+      navigateToView("library", libraryRouteParams());
+      return;
+    }
+    if (quickTagButton) {
+      await toggleQuickTag(quickTagButton.dataset.quickTag);
       return;
     }
     if (ratingStar) await updateRating(ratingStar.dataset.ratingStar);
@@ -2136,7 +2566,7 @@ elements.comicDetail.addEventListener("click", async (event) => {
       state.mode = "single";
       state.controlsOpen = false;
       await incrementViews();
-      navigateToView("reader");
+      navigateToView("reader", readerRouteParams());
       return;
     }
     if (event.target.id === "openTagEditorButton") {
@@ -2172,7 +2602,7 @@ elements.comicDetail.addEventListener("click", async (event) => {
       state.controlsOpen = false;
       completedComicId = "";
       await incrementViews();
-      navigateToView("reader");
+      navigateToView("reader", readerRouteParams());
       return;
     }
   } catch (error) {
@@ -2269,9 +2699,20 @@ elements.readerTopbar.addEventListener("click", (event) => {
     navigateToView("detail");
     return;
   }
+  const previousComicButton = event.target.closest("#prevComicButton");
+  if (previousComicButton && !previousComicButton.disabled) {
+    switchReaderComic(-1).catch((error) => setStatus(friendlyError(error), "error"));
+    return;
+  }
+  const nextComicButton = event.target.closest("#nextComicButton");
+  if (nextComicButton && !nextComicButton.disabled) {
+    switchReaderComic(1).catch((error) => setStatus(friendlyError(error), "error"));
+    return;
+  }
   const modeButton = event.target.closest("[data-reader-mode]");
   if (modeButton) {
     state.mode = modeButton.dataset.readerMode;
+    if (state.mode !== "scroll") state.keyboardSpeedOpen = false;
     if (state.autoPlay) startAutoPlay();
     renderReader();
     return;
@@ -2283,6 +2724,11 @@ elements.readerTopbar.addEventListener("click", (event) => {
     } else {
       startAutoPlay();
     }
+    renderReader();
+    return;
+  }
+  if (event.target.closest("#keySpeedToggle")) {
+    state.keyboardSpeedOpen = !state.keyboardSpeedOpen;
     renderReader();
     return;
   }
@@ -2308,8 +2754,100 @@ elements.autoInterval.addEventListener("input", () => {
   renderReader();
 });
 
+elements.keySpeedRange.addEventListener("input", () => {
+  state.keyboardScrollSpeed = Math.max(200, Math.min(1800, Number(elements.keySpeedRange.value) || 850));
+  syncKeySpeedControl();
+  try {
+    localStorage.setItem(READER_KEY_SPEED_STORAGE_KEY, String(state.keyboardScrollSpeed));
+  } catch {
+    // Local storage can be unavailable in restricted browser modes.
+  }
+});
+
+function syncKeySpeedControl() {
+  const min = Number(elements.keySpeedRange.min) || 200;
+  const max = Number(elements.keySpeedRange.max) || 1800;
+  const percent = max > min ? (state.keyboardScrollSpeed - min) / (max - min) : 0;
+  elements.keySpeedRange.value = String(state.keyboardScrollSpeed);
+  elements.keySpeedValue.textContent = `${state.keyboardScrollSpeed}`;
+  elements.keySpeedPopover.style.setProperty("--key-speed-thumb-top", `${44 + (1 - percent) * 140}px`);
+}
+
+function stepReaderPage(delta) {
+  const comic = getSelectedComic();
+  if (!comic) return;
+  const pages = comicPages(comic);
+  if (!pages.length) return;
+  const nextIndex = Math.max(0, Math.min(pages.length - 1, state.pageIndex + delta));
+  if (nextIndex === state.pageIndex) {
+    if (delta > 0) showReaderComplete(comic);
+    return;
+  }
+  state.pageIndex = nextIndex;
+  state.controlsOpen = false;
+  if (state.mode === "scroll") {
+    elements.slideReader.classList.remove("controls-open");
+    elements.pageSelect.value = String(state.pageIndex);
+    elements.readerDeletePageName.textContent = `第 ${state.pageIndex + 1} / ${pages.length} 页 · ${pageLabel(pages[state.pageIndex], state.pageIndex)}`;
+    updateReaderProgress(comic);
+    const target = elements.readerStage.querySelector(`img[data-page-index="${state.pageIndex}"]`);
+    if (target) {
+      readerKeyboardScrollLockUntil = Date.now() + 300;
+      target.scrollIntoView({ behavior: "auto", block: "start" });
+      return;
+    }
+    state.readerScrollEnd = Math.max(state.readerScrollEnd, state.pageIndex + 1);
+    renderReader();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      readerKeyboardScrollLockUntil = Date.now() + 300;
+      elements.readerStage
+        .querySelector(`img[data-page-index="${state.pageIndex}"]`)
+        ?.scrollIntoView({ behavior: "auto", block: "start" });
+    }));
+    return;
+  }
+  renderReader();
+}
+
+function stopReaderKeyboardScroll() {
+  if (readerKeyboardScrollFrame) cancelAnimationFrame(readerKeyboardScrollFrame);
+  readerKeyboardScrollFrame = 0;
+  readerKeyboardScrollDirection = 0;
+  readerKeyboardScrollLastTime = 0;
+}
+
+function startReaderKeyboardScroll(direction) {
+  if (readerKeyboardScrollDirection === direction && readerKeyboardScrollFrame) return;
+  stopReaderKeyboardScroll();
+  readerKeyboardScrollDirection = direction;
+  readerKeyboardScrollLastTime = performance.now();
+  window.scrollBy({ top: direction * state.keyboardScrollSpeed * 0.065, behavior: "auto" });
+  const tick = (timestamp) => {
+    if (state.view !== "reader" || state.mode !== "scroll" || !readerKeyboardScrollDirection) {
+      stopReaderKeyboardScroll();
+      return;
+    }
+    const elapsed = Math.min(50, Math.max(0, timestamp - readerKeyboardScrollLastTime));
+    readerKeyboardScrollLastTime = timestamp;
+    window.scrollBy({ top: readerKeyboardScrollDirection * elapsed * state.keyboardScrollSpeed / 1000, behavior: "auto" });
+    readerKeyboardScrollFrame = requestAnimationFrame(tick);
+  };
+  readerKeyboardScrollFrame = requestAnimationFrame(tick);
+}
+
 window.addEventListener("keydown", (event) => {
   if (state.view !== "reader") return;
+  if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea, [contenteditable='true'], [popover]")) return;
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+    const direction = event.key === "ArrowUp" ? -1 : 1;
+    if (state.mode === "scroll") {
+      startReaderKeyboardScroll(direction);
+    } else {
+      stepReaderPage(direction);
+    }
+    return;
+  }
   if (event.key.toLowerCase() === "s") {
     state.mode = state.mode === "scroll" ? "single" : "scroll";
     elements.readingMode.value = state.mode;
@@ -2322,10 +2860,16 @@ window.addEventListener("keydown", (event) => {
   if (!comic) return;
   event.preventDefault();
   const delta = event.key === "ArrowLeft" ? -1 : 1;
-  const pages = comicPages(comic);
-  state.pageIndex = Math.max(0, Math.min(pages.length - 1, state.pageIndex + delta));
-  renderReader();
+  stepReaderPage(delta);
 });
+
+window.addEventListener("keyup", (event) => {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  if (state.view === "reader" && state.mode === "scroll") event.preventDefault();
+  stopReaderKeyboardScroll();
+});
+
+window.addEventListener("blur", stopReaderKeyboardScroll);
 
 window.addEventListener("resize", () => {
   if (state.view === "reader" && state.autoFit) {
@@ -2399,9 +2943,6 @@ window.addEventListener("hashchange", syncViewFromHash);
 function handlePopState(event) {
   if (event.state && event.state.comicId) {
     state.selectedComicId = event.state.comicId;
-    persistSelectedComic();
-  } else {
-    state.selectedComicId = "";
     persistSelectedComic();
   }
   syncViewFromHash();

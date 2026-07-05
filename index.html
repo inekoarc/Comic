@@ -99,6 +99,7 @@
           <span id="resultCount">0 本漫画</span>
         </div>
         <div class="filter-bar" id="tagFilters"></div>
+        <div class="filter-bar page-range-filter" id="pageRangeFilters" hidden></div>
         <div class="directory-grid" id="comicGrid"></div>
         <nav class="library-pager" id="libraryPager" aria-label="漫画库分页"></nav>
       </section>
@@ -133,10 +134,19 @@
             <button class="reader-pill reader-delete-button" id="deleteComicButton" type="button" popovertarget="readerDeleteModal">删除</button>
             <button class="reader-pill reader-delete-page-button" id="deletePageButton" type="button" popovertarget="readerDeletePageModal" title="删除当前阅读页">删页</button>
             <button class="reader-pill reader-move-button" id="moveComicButton" type="button" popovertarget="readerMoveModal">移动</button>
+            <button class="reader-pill reader-neighbor-button" id="prevComicButton" type="button" title="切换到上一部漫画">上一部</button>
+            <button class="reader-pill reader-neighbor-button" id="nextComicButton" type="button" title="切换到下一部漫画">下一部</button>
             <div class="reader-spacer"></div>
             <button class="reader-pill" id="autoToggle" type="button">自动：关</button>
             <div class="auto-popover" id="autoPopover" hidden>
               <input id="autoInterval" class="auto-slider" type="range" min="1" max="30" value="10">
+            </div>
+            <div class="reader-key-speed-control" id="keySpeedControl">
+              <button class="reader-pill" id="keySpeedToggle" type="button" title="调整方向键滚动速度">键速</button>
+              <div class="key-speed-popover" id="keySpeedPopover" hidden>
+                <output id="keySpeedValue" for="keySpeedRange">850 px/s</output>
+                <input class="key-speed-slider" id="keySpeedRange" type="range" min="200" max="1800" step="50" value="850" aria-label="方向键滚动速度">
+              </div>
             </div>
             <button class="reader-pill reader-icon" id="readerThemeToggle" type="button" aria-label="切换日夜">☀</button>
             <button class="reader-pill" id="fitToggle" type="button">自适应</button>
@@ -208,6 +218,6 @@
       </div>
     </main>
 
-    <script src="app.js?v=20260617-5"></script>
+    <script src="app.js?v=20260705-3"></script>
   </body>
 </html>

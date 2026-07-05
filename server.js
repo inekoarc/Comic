@@ -438,7 +438,6 @@ async function buildOrReuseComic({ root, rootId, rootName, relativeDir, title, c
 
 async function scanComicDirectories(root, rootId, rootName, dir, previousByKey, comics, comicOffset = 0) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
-  const fileMetadata = await readComicMetadata(dir, entries);
   const directImages = entries
     .filter((entry) => entry.isFile() && isImage(entry.name))
     .map((entry) => path.relative(root, path.join(dir, entry.name)))
@@ -446,6 +445,7 @@ async function scanComicDirectories(root, rootId, rootName, dir, previousByKey, 
   const relativeDir = path.relative(root, dir) || ".";
 
   if (directImages.length) {
+    const fileMetadata = await readComicMetadata(dir, entries);
     const comic = await buildOrReuseComic({
       root,
       rootId,
@@ -797,14 +797,29 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, { libraryRoots: [], comics: [], metadata: await getMetadata(), scanning: false });
       return;
     }
-    const index = await refreshIndex(libraryRoots);
+    const cached = await loadIndex();
+    const cacheMatches = cached && rootsMatch(cached.libraryRoots || [cached.libraryRoot].filter(Boolean), libraryRoots);
+    const refresh = refreshIndex(libraryRoots);
+    if (cacheMatches) {
+      refresh.catch((error) => console.error("Background sync failed:", error.message));
+      sendJson(res, 200, {
+        libraryRoots,
+        libraryRoot: libraryRoots[0] || "",
+        comics: cached.comics.map(publicComic),
+        metadata: await getMetadata(),
+        scannedAt: cached.scannedAt,
+        scanning: true
+      });
+      return;
+    }
+    const index = await refresh;
     sendJson(res, 200, {
       libraryRoots,
       libraryRoot: libraryRoots[0] || "",
       comics: index.comics.map(publicComic),
       metadata: await getMetadata(),
       scannedAt: index.scannedAt,
-      scanning: Boolean(scanPromise)
+      scanning: false
     });
     return;
   }
