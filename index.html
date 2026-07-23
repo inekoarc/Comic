@@ -21,7 +21,7 @@
         </form>
 
         <button class="icon-button" id="themeToggle" type="button" aria-label="切换主题" title="切换主题">☀</button>
-        <button class="settings-button" id="settingsToggle" type="button">设置</button>
+        <button class="settings-button" id="settingsToggle" type="button" aria-expanded="false" aria-controls="libraryConfig">设置</button>
       </div>
 
       <nav class="main-nav" aria-label="主导航">
@@ -43,6 +43,13 @@
 
     <main>
       <section class="library-config" id="libraryConfig" hidden>
+        <div class="library-config-head">
+          <div>
+            <strong>漫画根目录</strong>
+            <span>管理本地收藏来源</span>
+          </div>
+          <button class="text-button library-config-close" id="settingsClose" type="button" aria-label="关闭设置">×</button>
+        </div>
         <form class="path-form" id="pathForm">
           <label>
             <span>漫画根目录</span>

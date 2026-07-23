@@ -12,6 +12,7 @@ const SELECTED_COMIC_STORAGE_KEY = "comicSelectedComic";
 const SELECTED_COLLECTION_STORAGE_KEY = "comicSelectedCollection";
 const CATEGORY_COVERS_STORAGE_KEY = "comicCategoryCovers";
 const READER_KEY_SPEED_STORAGE_KEY = "comicReaderKeySpeed";
+const READING_PROGRESS_STORAGE_KEY = "comicReadingProgress";
 
 function readSavedLibraryView() {
   try {
@@ -55,6 +56,14 @@ function readSavedReaderKeySpeed() {
   }
 }
 
+function readSavedReadingProgress() {
+  try {
+    return JSON.parse(localStorage.getItem(READING_PROGRESS_STORAGE_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
 const state = {
   comics: [],
   selectedComicId: readSavedSelectedComicId(),
@@ -91,6 +100,7 @@ const state = {
   libraryRoots: [],
   libraryLoaded: false,
   categoryCovers: readSavedCategoryCovers(),
+  readingProgress: readSavedReadingProgress(),
   categoryCoverEditor: "",
   search: "",
   view: "home"
@@ -105,6 +115,7 @@ const elements = {
   syncLibraryButton: $("#syncLibraryButton"),
   libraryConfig: $("#libraryConfig"),
   settingsToggle: $("#settingsToggle"),
+  settingsClose: $("#settingsClose"),
   statusLine: $("#statusLine"),
   syncProgress: $("#syncProgress"),
   syncProgressLabel: $("#syncProgressLabel"),
@@ -310,6 +321,40 @@ function getSelectedComic() {
 function comicPages(comic) {
   if (!comic) return [];
   return Array.isArray(comic.pages) && comic.pages.length ? comic.pages : (comic.cover ? [comic.cover] : []);
+}
+
+function savedReaderPageIndex(comic) {
+  const pages = comicPages(comic);
+  if (!comic || !pages.length) return 0;
+  const saved = state.readingProgress[comic.id];
+  const rawIndex = saved && typeof saved === "object" ? saved.pageIndex : saved;
+  const index = Math.floor(Number(rawIndex) || 0);
+  return Math.max(0, Math.min(pages.length - 1, index));
+}
+
+function persistReadingProgress() {
+  try {
+    localStorage.setItem(READING_PROGRESS_STORAGE_KEY, JSON.stringify(state.readingProgress));
+  } catch {
+    // Reading progress is a convenience cache; the reader still works if storage is unavailable.
+  }
+}
+
+function persistReaderPosition(comic = getSelectedComic()) {
+  const pages = comicPages(comic);
+  if (!comic || !pages.length) return;
+  state.pageIndex = Math.max(0, Math.min(pages.length - 1, Math.floor(Number(state.pageIndex) || 0)));
+  state.readingProgress[comic.id] = {
+    pageIndex: state.pageIndex,
+    updatedAt: new Date().toISOString()
+  };
+  persistReadingProgress();
+}
+
+function removeReaderPosition(id) {
+  if (!id || !state.readingProgress[id]) return;
+  delete state.readingProgress[id];
+  persistReadingProgress();
 }
 
 function mergeComic(nextComic) {
@@ -1110,15 +1155,20 @@ async function switchReaderComic(offset) {
   if (state.selectedComicId !== target.id) completedComicId = "";
   state.selectedComicId = target.id;
   persistSelectedComic();
-  state.pageIndex = 0;
+  const fullComic = await ensureComicPages(target.id);
+  const savedPageIndex = savedReaderPageIndex(fullComic || target);
+  state.pageIndex = savedPageIndex;
   state.detailPage = 1;
-  state.readerScrollEnd = READER_SCROLL_WINDOW;
+  state.readerScrollEnd = Math.max(READER_SCROLL_WINDOW, state.pageIndex + 1);
   state.controlsOpen = true;
-  await ensureComicPages(target.id);
   await incrementViews();
   history.replaceState(null, "", routeHash("reader", readerRouteParams()));
   renderReader();
-  window.scrollTo(0, 0);
+  if (state.mode === "scroll") {
+    scrollReaderToCurrentPage(savedPageIndex);
+  } else {
+    window.scrollTo(0, 0);
+  }
 }
 
 function comicCard(comic) {
@@ -1219,6 +1269,21 @@ function updateReaderProgress(comic = getSelectedComic()) {
   elements.progressBar.style.width = `${progress}%`;
 }
 
+function scrollReaderToCurrentPage(index = state.pageIndex) {
+  if (state.view !== "reader" || state.mode !== "scroll") return;
+  const targetIndex = Math.max(0, Math.floor(Number(index) || 0));
+  readerKeyboardScrollLockUntil = Date.now() + 1200;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const target = elements.readerStage.querySelector(`img[data-page-index="${targetIndex}"]`);
+    if (!target) return;
+    state.pageIndex = targetIndex;
+    elements.pageSelect.value = String(state.pageIndex);
+    updateReaderProgress();
+    readerKeyboardScrollLockUntil = Date.now() + 300;
+    target.scrollIntoView({ behavior: "auto", block: "start" });
+  }));
+}
+
 function scrollWindowBounds(total, current) {
   const start = Math.max(0, Math.min(current, Math.max(0, total - READER_SCROLL_WINDOW)));
   return {
@@ -1288,6 +1353,7 @@ function syncScrollPageIndex() {
     state.pageIndex = Math.max(0, Math.min(pages.length - 1, nearestIndex));
     elements.pageSelect.value = String(state.pageIndex);
     updateReaderProgress(comic);
+    persistReaderPosition(comic);
   }
 }
 
@@ -1610,6 +1676,8 @@ function renderDetail() {
   const tags = meta.tags;
   const fallbackDescription = `本地漫画目录：${comic.relativeDir || "-"}`;
   const description = meta.description || fallbackDescription;
+  const savedPageIndex = savedReaderPageIndex(comic);
+  const readButtonLabel = savedPageIndex > 0 ? "继续阅读" : "开始阅读";
 
   elements.comicDetail.innerHTML = `
     <div class="detail-shell">
@@ -1695,7 +1763,7 @@ function renderDetail() {
             </div>
           </dl>
           <div class="detail-main-actions">
-            <button class="start-reading-button" id="readButton" type="button">开始阅读</button>
+            <button class="start-reading-button" id="readButton" type="button">${escapeHTML(readButtonLabel)}</button>
             <button class="secondary-button quick-tag-button ${tags.includes("待看") ? "active" : ""}" type="button" data-quick-tag="待看">待看</button>
             <button class="secondary-button quick-tag-button ${tags.includes("收藏") ? "active" : ""}" type="button" data-quick-tag="收藏">收藏</button>
           </div>
@@ -1903,6 +1971,7 @@ function startAutoPlay() {
       return;
     }
     state.pageIndex = Math.min(pages.length - 1, state.pageIndex + 1);
+    persistReaderPosition(current);
     renderReader();
   }, state.autoSeconds * 1000);
 }
@@ -1921,6 +1990,7 @@ async function deleteSelectedComic() {
     await api(`/api/comics/${encodeURIComponent(comic.id)}`, { method: "DELETE" });
     state.comics = state.comics.filter((item) => item.id !== comic.id);
     delete state.meta[comic.id];
+    removeReaderPosition(comic.id);
     invalidateDerivedCache();
     state.selectedComicId = "";
     if (elements.readerDeleteModal.matches(":popover-open")) elements.readerDeleteModal.hidePopover();
@@ -1949,6 +2019,7 @@ async function deleteSelectedPage() {
     const nextPages = comicPages(updatedComic);
     state.pageIndex = Math.max(0, Math.min(state.pageIndex, nextPages.length - 1));
     state.readerScrollEnd = Math.min(nextPages.length, Math.max(READER_SCROLL_WINDOW, state.readerScrollEnd - 1));
+    persistReaderPosition(updatedComic);
     completedComicId = "";
     invalidateDerivedCache();
     if (elements.readerDeletePageModal.matches(":popover-open")) elements.readerDeletePageModal.hidePopover();
@@ -1979,6 +2050,11 @@ async function moveSelectedComic() {
     } else if (movedComic.id !== comic.id && state.meta[comic.id]) {
       state.meta[movedComic.id] = state.meta[comic.id];
       delete state.meta[comic.id];
+    }
+    if (movedComic.id !== comic.id && state.readingProgress[comic.id]) {
+      state.readingProgress[movedComic.id] = state.readingProgress[comic.id];
+      delete state.readingProgress[comic.id];
+      persistReadingProgress();
     }
     state.selectedComicId = movedComic.id;
     persistSelectedComic();
@@ -2293,9 +2369,33 @@ if (elements.rootList) elements.rootList.addEventListener("click", async (event)
   }
 });
 
+function setSettingsPanelOpen(open) {
+  elements.libraryConfig.hidden = !open;
+  elements.settingsToggle.classList.toggle("active", open);
+  elements.settingsToggle.setAttribute("aria-expanded", String(open));
+}
+
 elements.settingsToggle.addEventListener("click", () => {
-  elements.libraryConfig.hidden = !elements.libraryConfig.hidden;
-  elements.settingsToggle.classList.toggle("active", !elements.libraryConfig.hidden);
+  setSettingsPanelOpen(elements.libraryConfig.hidden);
+});
+
+if (elements.settingsClose) {
+  elements.settingsClose.addEventListener("click", () => {
+    setSettingsPanelOpen(false);
+    elements.settingsToggle.focus();
+  });
+}
+
+document.addEventListener("click", (event) => {
+  if (elements.libraryConfig.hidden) return;
+  if (event.target.closest("#libraryConfig") || event.target.closest("#settingsToggle")) return;
+  setSettingsPanelOpen(false);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || elements.libraryConfig.hidden) return;
+  setSettingsPanelOpen(false);
+  elements.settingsToggle.focus();
 });
 
 elements.headerSearch.addEventListener("submit", (event) => {
@@ -2566,6 +2666,7 @@ elements.comicDetail.addEventListener("click", async (event) => {
       state.pageIndex = Number(thumb.dataset.pageIndex) || 0;
       state.mode = "single";
       state.controlsOpen = false;
+      persistReaderPosition();
       await incrementViews();
       navigateToView("reader", readerRouteParams());
       return;
@@ -2596,14 +2697,16 @@ elements.comicDetail.addEventListener("click", async (event) => {
       renderDetail();
     }
     if (event.target.id === "readButton") {
-      await ensureComicPages();
-      state.pageIndex = 0;
+      const comic = await ensureComicPages();
+      const savedPageIndex = savedReaderPageIndex(comic || getSelectedComic());
+      state.pageIndex = savedPageIndex;
       state.mode = "scroll";
-      state.readerScrollEnd = READER_SCROLL_WINDOW;
+      state.readerScrollEnd = Math.max(READER_SCROLL_WINDOW, state.pageIndex + 1);
       state.controlsOpen = false;
       completedComicId = "";
       await incrementViews();
       navigateToView("reader", readerRouteParams());
+      scrollReaderToCurrentPage(savedPageIndex);
       return;
     }
   } catch (error) {
@@ -2633,18 +2736,19 @@ elements.comicDetail.addEventListener("keydown", async (event) => {
 });
 
 if (elements.prevPage) elements.prevPage.addEventListener("click", () => {
-  state.pageIndex -= 1;
-  renderReader();
+  stepReaderPage(-1);
 });
 
 if (elements.nextPage) elements.nextPage.addEventListener("click", () => {
-  state.pageIndex += 1;
-  renderReader();
+  stepReaderPage(1);
 });
 
 if (elements.pageSelect) elements.pageSelect.addEventListener("change", () => {
   state.pageIndex = Number(elements.pageSelect.value);
+  const targetIndex = state.pageIndex;
+  persistReaderPosition();
   renderReader();
+  scrollReaderToCurrentPage(targetIndex);
 });
 
 elements.readerStage.addEventListener("click", (event) => {
@@ -2665,6 +2769,7 @@ elements.readerStage.addEventListener("click", (event) => {
   if (!comic) return;
   const pages = comicPages(comic);
   state.pageIndex = Math.max(0, Math.min(pages.length - 1, state.pageIndex + Number(hotspot.dataset.readerStep)));
+  persistReaderPosition(comic);
   renderReader();
 });
 
@@ -2786,6 +2891,7 @@ function stepReaderPage(delta) {
   }
   state.pageIndex = nextIndex;
   state.controlsOpen = false;
+  persistReaderPosition(comic);
   if (state.mode === "scroll") {
     elements.slideReader.classList.remove("controls-open");
     elements.pageSelect.value = String(state.pageIndex);
