@@ -832,6 +832,7 @@ function syncViewFromHash() {
     const max = params.get("max");
     state.activePageMin = min || "";
     state.activePageMax = max || "";
+    renderTags();
   }
   if (view === "detail" || view === "reader") {
     const comicId = params.get("id");

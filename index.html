@@ -137,9 +137,11 @@
             <button class="reader-pill reader-neighbor-button" id="prevComicButton" type="button" title="切换到上一部漫画">上一部</button>
             <button class="reader-pill reader-neighbor-button" id="nextComicButton" type="button" title="切换到下一部漫画">下一部</button>
             <div class="reader-spacer"></div>
-            <button class="reader-pill" id="autoToggle" type="button">自动：关</button>
-            <div class="auto-popover" id="autoPopover" hidden>
-              <input id="autoInterval" class="auto-slider" type="range" min="1" max="30" value="10">
+            <div class="reader-auto-control">
+              <button class="reader-pill" id="autoToggle" type="button">自动：关</button>
+              <div class="auto-popover" id="autoPopover" hidden>
+                <input id="autoInterval" class="auto-slider" type="range" min="1" max="30" value="10">
+              </div>
             </div>
             <div class="reader-key-speed-control" id="keySpeedControl">
               <button class="reader-pill" id="keySpeedToggle" type="button" title="调整方向键滚动速度">键速</button>
@@ -218,6 +220,6 @@
       </div>
     </main>
 
-    <script src="app.js?v=20260705-3"></script>
+    <script src="app.js?v=20260723-1"></script>
   </body>
 </html>
