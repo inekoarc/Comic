@@ -13,6 +13,10 @@ const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const META_FILE = path.join(DATA_DIR, "metadata.json");
 const INDEX_FILE = path.join(DATA_DIR, "library-index.json");
 const THUMB_DIR = path.join(DATA_DIR, "thumbs");
+const TOOLS_DIR = path.join(ROOT, "tools");
+const FOLDER_PICKER_SOURCE = path.join(TOOLS_DIR, "ComicFolderPicker.cs");
+const FOLDER_PICKER_EXE = path.join(TOOLS_DIR, "ComicFolderPicker.exe");
+const APP_ICON_FILE = path.join(ROOT, "assets", "favicon.ico");
 const INDEX_VERSION = 4;
 
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif"]);
@@ -98,22 +102,37 @@ function normalizeRoots(value) {
   return [...new Set(roots.map(normalizeRoot).filter(Boolean))];
 }
 
+function normalizeRootMode(value) {
+  return value === "category" ? "category" : "library";
+}
+
+function normalizeRootModes(value, roots, fallbackMode = "library") {
+  const source = value && typeof value === "object" ? value : {};
+  return Object.fromEntries(roots.map((root) => {
+    const normalizedRoot = normalizeRoot(root);
+    return [normalizedRoot, normalizeRootMode(source[root] ?? source[normalizedRoot] ?? fallbackMode)];
+  }));
+}
+
 async function getConfig() {
   const config = await readJson(CONFIG_FILE, { libraryRoots: [] });
   const libraryRoots = normalizeRoots(config.libraryRoots?.length ? config.libraryRoots : config.libraryRoot);
+  const rootModes = normalizeRootModes(config.rootModes, libraryRoots);
   const categoryCovers = config.categoryCovers && typeof config.categoryCovers === "object"
     ? Object.fromEntries(Object.entries(config.categoryCovers)
       .map(([category, comicId]) => [String(category).trim(), String(comicId).trim()])
       .filter(([category, comicId]) => category && comicId))
     : {};
-  return { libraryRoots, libraryRoot: libraryRoots[0] || "", categoryCovers };
+  return { libraryRoots, libraryRoot: libraryRoots[0] || "", rootModes, categoryCovers };
 }
 
-async function saveConfig(libraryRoots, categoryCovers) {
+async function saveConfig(libraryRoots, categoryCovers, rootModes) {
   const current = await getConfig();
+  const normalizedRoots = normalizeRoots(libraryRoots);
   await writeJson(CONFIG_FILE, {
-    libraryRoots,
-    libraryRoot: libraryRoots[0] || "",
+    libraryRoots: normalizedRoots,
+    libraryRoot: normalizedRoots[0] || "",
+    rootModes: normalizeRootModes(rootModes ?? current.rootModes, normalizedRoots),
     categoryCovers: categoryCovers ?? current.categoryCovers
   });
 }
@@ -309,49 +328,94 @@ function publicComic(comic) {
   };
 }
 
-function selectDirectory(initialDir = "") {
+async function findCSharpCompiler() {
+  if (process.platform !== "win32") return "";
+  const candidates = [
+    path.join(process.env.WINDIR || "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
+    path.join(process.env.WINDIR || "C:\\Windows", "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe")
+  ];
+  for (const candidate of candidates) {
+    const stat = await fs.stat(candidate).catch(() => null);
+    if (stat?.isFile()) return candidate;
+  }
+  return "";
+}
+
+function runProcess(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr.trim() || error.message));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+async function ensureFolderPicker() {
+  const [sourceStat, exeStat] = await Promise.all([
+    fs.stat(FOLDER_PICKER_SOURCE).catch(() => null),
+    fs.stat(FOLDER_PICKER_EXE).catch(() => null)
+  ]);
+  if (!sourceStat?.isFile()) throw new Error("Folder picker helper source was not found");
+  if (exeStat?.isFile() && exeStat.mtimeMs >= sourceStat.mtimeMs) return FOLDER_PICKER_EXE;
+
+  const compiler = await findCSharpCompiler();
+  if (!compiler) throw new Error("C# compiler was not found, cannot build folder picker helper");
+  const compileArgs = [
+    "/nologo",
+    "/target:winexe",
+    `/out:${FOLDER_PICKER_EXE}`
+  ];
+  if (await fs.stat(APP_ICON_FILE).catch(() => null)) compileArgs.push(`/win32icon:${APP_ICON_FILE}`);
+  compileArgs.push(FOLDER_PICKER_SOURCE);
+  await runProcess(compiler, compileArgs, { windowsHide: true, timeout: 120000 });
+  return FOLDER_PICKER_EXE;
+}
+
+async function selectDirectory(initialDir = "") {
   if (process.platform !== "win32") {
     throw new Error("Directory picker is only available on Windows in this local build");
   }
 
-  const script = [
-    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
-    "$OutputEncoding = [System.Text.Encoding]::UTF8",
-    "$initial = $env:COMIC_INITIAL_DIR",
-    "Add-Type -AssemblyName System.Windows.Forms",
-    "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog",
-    "$dialog.Description = '选择漫画根目录'",
-    "$dialog.ShowNewFolderButton = $true",
-    "if ($initial -and [System.IO.Directory]::Exists($initial)) { $dialog.SelectedPath = $initial }",
-    "$result = $dialog.ShowDialog()",
-    "if ($result -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }"
-  ].join("; ");
-
-  return new Promise((resolve, reject) => {
-    execFile(
-      "powershell.exe",
-      ["-NoProfile", "-STA", "-Command", script],
-      {
-        windowsHide: false,
-        timeout: 600000,
-        env: { ...process.env, COMIC_INITIAL_DIR: initialDir }
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(stderr.trim() || error.message));
-          return;
-        }
-        resolve(stdout.trim());
-      }
+  const picker = await ensureFolderPicker();
+  const outputFile = path.join(DATA_DIR, `folder-picker-${process.pid}-${Date.now()}.txt`);
+  try {
+    await runProcess(
+      picker,
+      [initialDir || "", outputFile],
+      { windowsHide: false, timeout: 600000 }
     );
-  });
+    const output = await fs.readFile(outputFile, "utf8").catch(() => "");
+    if (output.startsWith("ERROR	")) throw new Error(output.slice(6).trim() || "Folder picker failed");
+    return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  } finally {
+    await fs.unlink(outputFile).catch(() => {});
+  }
 }
+
+
 
 function categoryForRelativeDir(relativeDir) {
   if (relativeDir === ".") return "未分类";
   const parts = relativeDir.split(/[\\/]+/).filter(Boolean);
   if (parts.length <= 1) return parts[0] || "未分类";
   return parts.slice(0, -1).join(" / ");
+}
+
+function categoryForScanRoot(relativeDir, rootName, rootMode = "library") {
+  if (rootMode !== "category") return categoryForRelativeDir(relativeDir);
+  const rootCategory = rootName || "\u672a\u5206\u7c7b";
+  if (relativeDir === ".") return rootCategory;
+  const parts = relativeDir.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= 1) return rootCategory;
+  return [rootCategory, ...parts.slice(0, -1)].join(" / ");
+}
+
+function stripCategoryRootParts(categoryParts, rootName, rootMode = "library") {
+  if (rootMode !== "category" || !categoryParts.length) return categoryParts;
+  return categoryParts[0] === rootName ? categoryParts.slice(1) : categoryParts;
 }
 
 function categoryPathParts(category) {
@@ -380,6 +444,28 @@ function titleForRelativeDir(relativeDir) {
   if (relativeDir === ".") return "根目录漫画";
   const parts = relativeDir.split(/[\\/]+/).filter(Boolean);
   return parts.at(-1) || relativeDir;
+}
+
+function titleForScanRoot(relativeDir, rootName, rootMode = "library") {
+  if (rootMode !== "category") return titleForRelativeDir(relativeDir);
+  if (relativeDir === ".") return rootName || titleForRelativeDir(relativeDir);
+  return titleForRelativeDir(relativeDir);
+}
+
+async function directorySignature(dir) {
+  const stat = await fs.stat(dir);
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const children = await Promise.all(entries.map(async (entry) => {
+    const childPath = path.join(dir, entry.name);
+    const childStat = await fs.stat(childPath).catch(() => null);
+    return [entry.name, entry.isDirectory() ? "d" : "f", childStat?.size || 0, Math.round(childStat?.mtimeMs || 0)].join(":");
+  }));
+  children.sort(naturalSort);
+  return crypto.createHash("sha1")
+    .update(String(Math.round(stat.mtimeMs)))
+    .update("|")
+    .update(children.join("|"))
+    .digest("hex");
 }
 
 function buildComic({ root, rootId, rootName, relativeDir, title, images, category, dirMtimeMs, initialTags = [], initialDescription = "" }) {
@@ -436,7 +522,7 @@ async function buildOrReuseComic({ root, rootId, rootName, relativeDir, title, c
   });
 }
 
-async function scanComicDirectories(root, rootId, rootName, dir, previousByKey, comics, comicOffset = 0) {
+async function scanComicDirectories(root, rootId, rootName, dir, previousByKey, comics, comicOffset = 0, rootMode = "library") {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const directImages = entries
     .filter((entry) => entry.isFile() && isImage(entry.name))
@@ -451,8 +537,8 @@ async function scanComicDirectories(root, rootId, rootName, dir, previousByKey, 
       rootId,
       rootName,
       relativeDir,
-      title: titleForRelativeDir(relativeDir),
-      category: categoryForRelativeDir(relativeDir),
+      title: titleForScanRoot(relativeDir, rootName, rootMode),
+      category: categoryForScanRoot(relativeDir, rootName, rootMode),
       dirPath: dir,
       directImages,
       initialTags: fileMetadata.tags,
@@ -481,33 +567,53 @@ async function scanComicDirectories(root, rootId, rootName, dir, previousByKey, 
   });
 
   for (const folder of folders) {
-    await scanComicDirectories(root, rootId, rootName, path.join(dir, folder.name), previousByKey, comics, comicOffset);
+    await scanComicDirectories(root, rootId, rootName, path.join(dir, folder.name), previousByKey, comics, comicOffset, rootMode);
   }
 }
 
-async function scanLibrary(root, previousIndex = null, comicOffset = 0) {
+async function scanLibrary(root, previousIndex = null, comicOffset = 0, rootMode = "library") {
   const stat = await fs.stat(root);
   if (!stat.isDirectory()) throw new Error("Library path is not a directory");
 
   const rootId = rootIdFor(root);
   const rootName = path.basename(root) || root;
-  const previousByKey = new Map(
-    (previousIndex?.comics || [])
-      .filter((comic) => comic.rootId === rootId)
-      .map((comic) => [`${comic.rootId}:${comic.relativeDir}`, comic])
-  );
+  const signature = await directorySignature(root);
+  const previousRootComics = (previousIndex?.comics || []).filter((comic) => comic.rootId === rootId);
+  if (previousRootComics.length && previousIndex?.rootSignatures?.[rootId] === signature) {
+    updateScanProgress({
+      phase: "scanning",
+      processedDirectories: scanProgress.processedDirectories + 1,
+      totalDirectories: Math.max(1, scanProgress.totalDirectories),
+      comicsFound: comicOffset + previousRootComics.length,
+      current: `${rootName} (unchanged, skipped)`,
+      percent: Math.min(90, scanProgress.percent + 1)
+    });
+    return {
+      version: INDEX_VERSION,
+      libraryRoot: root,
+      libraryRoots: [root],
+      rootModes: { [root]: rootMode },
+      rootSignatures: { [rootId]: signature },
+      scannedAt: new Date().toISOString(),
+      comics: previousRootComics
+    };
+  }
+
+  const previousByKey = new Map(previousRootComics.map((comic) => [`${comic.rootId}:${comic.relativeDir}`, comic]));
   const comics = [];
-  await scanComicDirectories(root, rootId, rootName, root, previousByKey, comics, comicOffset);
+  await scanComicDirectories(root, rootId, rootName, root, previousByKey, comics, comicOffset, rootMode);
   return {
     version: INDEX_VERSION,
     libraryRoot: root,
     libraryRoots: [root],
+    rootModes: { [root]: rootMode },
+    rootSignatures: { [rootId]: signature },
     scannedAt: new Date().toISOString(),
     comics
   };
 }
 
-async function scanLibraries(libraryRoots, previousIndex = null) {
+async function scanLibraries(libraryRoots, previousIndex = null, rootModes = {}) {
   knownScanDirectories = new Set();
   for (const root of libraryRoots) knownScanDirectories.add(`${rootIdFor(root)}:.`);
   for (const comic of previousIndex?.comics || []) {
@@ -528,16 +634,22 @@ async function scanLibraries(libraryRoots, previousIndex = null) {
     current: ""
   });
   const comics = [];
+  const nextRootSignatures = {};
   for (const root of libraryRoots) {
-    const result = await scanLibrary(root, previousIndex, comics.length);
+    const rootMode = normalizeRootMode(rootModes[root]);
+    const result = await scanLibrary(root, previousIndex, comics.length, rootMode);
     comics.push(...result.comics);
+    Object.assign(nextRootSignatures, result.rootSignatures || {});
   }
+  comics.sort((a, b) => naturalSort(a.title, b.title));
   return {
     version: INDEX_VERSION,
     libraryRoot: libraryRoots[0] || "",
     libraryRoots,
+    rootModes: normalizeRootModes(rootModes, libraryRoots),
+    rootSignatures: nextRootSignatures,
     scannedAt: new Date().toISOString(),
-    comics
+    comics: comics.map((comic, index) => ({ ...comic, rank: index + 1 }))
   };
 }
 
@@ -607,11 +719,15 @@ function rootsMatch(a = [], b = []) {
   return a.length === b.length && a.every((root, index) => root === b[index]);
 }
 
-async function refreshIndex(libraryRoots) {
+function rootModesMatch(a = {}, b = {}, roots = []) {
+  return roots.every((root) => normalizeRootMode(a[root]) === normalizeRootMode(b[root]));
+}
+
+async function refreshIndex(libraryRoots, rootModes = {}) {
   if (scanPromise) return scanPromise;
   scanPromise = (async () => {
     const previous = await loadIndex();
-    const nextIndex = await scanLibraries(libraryRoots, previous);
+    const nextIndex = await scanLibraries(libraryRoots, previous, rootModes);
     updateScanProgress({ phase: "metadata", percent: 94, comicsFound: nextIndex.comics.length, current: "" });
     await initializeMetadataFromFiles(nextIndex.comics);
     updateScanProgress({ phase: "saving", percent: 98 });
@@ -627,20 +743,96 @@ async function refreshIndex(libraryRoots) {
   return scanPromise;
 }
 
-async function getLibraryIndex(libraryRoots, { refresh = false } = {}) {
+async function refreshRootIndex(targetRoot, libraryRoots, rootModes = {}) {
+  if (scanPromise) return scanPromise;
+  const normalizedRoots = normalizeRoots(libraryRoots);
+  const normalizedModes = normalizeRootModes(rootModes, normalizedRoots);
+  const root = normalizedRoots.find((item) => item === targetRoot);
+  if (!root) throw new Error("Directory is not in library roots");
+
+  scanPromise = (async () => {
+    const previous = await loadIndex();
+    const cacheMatches = previous
+      && rootsMatch(previous.libraryRoots || [previous.libraryRoot].filter(Boolean), normalizedRoots)
+      && rootModesMatch(previous.rootModes || {}, normalizedModes, normalizedRoots);
+    if (!cacheMatches) {
+      const nextIndex = await scanLibraries(normalizedRoots, previous, normalizedModes);
+      updateScanProgress({ phase: "metadata", percent: 94, comicsFound: nextIndex.comics.length, current: "" });
+      await initializeMetadataFromFiles(nextIndex.comics);
+      updateScanProgress({ phase: "saving", percent: 98 });
+      await saveIndex(nextIndex);
+      updateScanProgress({ phase: "complete", percent: 100 });
+      return nextIndex;
+    }
+
+    const rootId = rootIdFor(root);
+    knownScanDirectories = new Set([`${rootId}:.`]);
+    for (const comic of previous.comics || []) {
+      if (comic.rootId !== rootId) continue;
+      const parts = String(comic.relativeDir || "").split(/[\\/]+/).filter(Boolean);
+      let relative = "";
+      for (const part of parts) {
+        relative = relative ? path.join(relative, part) : part;
+        knownScanDirectories.add(`${rootId}:${relative}`);
+      }
+    }
+    updateScanProgress({
+      active: true,
+      phase: "scanning",
+      percent: 2,
+      processedDirectories: 0,
+      totalDirectories: Math.max(1, knownScanDirectories.size),
+      comicsFound: 0,
+      current: path.basename(root) || root
+    });
+
+    const result = await scanLibrary(root, previous, 0, normalizeRootMode(normalizedModes[root]));
+    const comics = [
+      ...(previous.comics || []).filter((comic) => comic.rootId !== rootId),
+      ...result.comics
+    ].sort((a, b) => naturalSort(a.title, b.title));
+    const nextIndex = {
+      ...previous,
+      version: INDEX_VERSION,
+      libraryRoot: normalizedRoots[0] || "",
+      libraryRoots: normalizedRoots,
+      rootModes: normalizedModes,
+      rootSignatures: { ...(previous.rootSignatures || {}), ...(result.rootSignatures || {}) },
+      scannedAt: new Date().toISOString(),
+      comics: comics.map((comic, index) => ({ ...comic, rank: index + 1 }))
+    };
+    updateScanProgress({ phase: "metadata", percent: 94, comicsFound: result.comics.length, current: path.basename(root) || root });
+    await initializeMetadataFromFiles(result.comics);
+    updateScanProgress({ phase: "saving", percent: 98, comicsFound: result.comics.length });
+    await saveIndex(nextIndex);
+    updateScanProgress({ phase: "complete", percent: 100, comicsFound: result.comics.length, current: path.basename(root) || root });
+    return nextIndex;
+  })().finally(() => {
+    scanPromise = null;
+    setTimeout(() => {
+      if (!scanPromise) updateScanProgress({ active: false, phase: "idle", current: "" });
+    }, 1500);
+  });
+  return scanPromise;
+}
+
+async function getLibraryIndex(libraryRoots, { refresh = false, rootModes = {} } = {}) {
   const cached = await loadIndex();
-  const cacheMatches = cached && rootsMatch(cached.libraryRoots || [cached.libraryRoot].filter(Boolean), libraryRoots);
+  const normalizedModes = normalizeRootModes(rootModes, libraryRoots);
+  const cacheMatches = cached
+    && rootsMatch(cached.libraryRoots || [cached.libraryRoot].filter(Boolean), libraryRoots)
+    && rootModesMatch(cached.rootModes || {}, normalizedModes, libraryRoots);
   if (refresh || !cacheMatches) {
-    return refreshIndex(libraryRoots);
+    return refreshIndex(libraryRoots, normalizedModes);
   }
   return cached;
 }
 
-async function findComic(libraryRoots, id) {
-  let index = await getLibraryIndex(libraryRoots);
+async function findComic(libraryRoots, id, rootModes = {}) {
+  let index = await getLibraryIndex(libraryRoots, { rootModes });
   let comic = index.comics.find((item) => item.id === id);
   if (!comic) {
-    index = await getLibraryIndex(libraryRoots, { refresh: true });
+    index = await getLibraryIndex(libraryRoots, { refresh: true, rootModes });
     comic = index.comics.find((item) => item.id === id);
   }
   return comic;
@@ -739,8 +931,8 @@ async function generateThumbnail(filePath, width) {
 
 async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/config") {
-    const { libraryRoots, libraryRoot, categoryCovers } = await getConfig();
-    sendJson(res, 200, { libraryRoots, libraryRoot, categoryCovers });
+    const { libraryRoots, libraryRoot, rootModes, categoryCovers } = await getConfig();
+    sendJson(res, 200, { libraryRoots, libraryRoot, rootModes, categoryCovers });
     return;
   }
 
@@ -751,15 +943,15 @@ async function handleApi(req, res, url) {
         .map(([category, comicId]) => [String(category).trim(), String(comicId).trim()])
         .filter(([category, comicId]) => category && comicId))
       : {};
-    const { libraryRoots } = await getConfig();
-    await saveConfig(libraryRoots, categoryCovers);
+    const { libraryRoots, rootModes } = await getConfig();
+    await saveConfig(libraryRoots, categoryCovers, rootModes);
     sendJson(res, 200, { categoryCovers });
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/api/select-directory") {
-    const selectedPath = await selectDirectory(url.searchParams.get("initial") || "");
-    sendJson(res, 200, selectedPath ? { path: selectedPath, canceled: false } : { path: "", canceled: true });
+    const selectedPaths = await selectDirectory(url.searchParams.get("initial") || "");
+    sendJson(res, 200, selectedPaths.length ? { path: selectedPaths[0], paths: selectedPaths, canceled: false } : { path: "", paths: [], canceled: true });
     return;
   }
 
@@ -781,34 +973,45 @@ async function handleApi(req, res, url) {
       }
     }
 
-    await saveConfig(nextRoots);
+    const postedModes = normalizeRootModes(body.rootModes, nextRoots, body.defaultRootMode || "category");
+    const nextRootModes = Object.fromEntries(nextRoots.map((root) => [root, current.rootModes[root] || postedModes[root] || "category"]));
+    await saveConfig(nextRoots, current.categoryCovers, nextRootModes);
     if (nextRoots.length) {
-      refreshIndex(nextRoots).catch((error) => console.error("Background scan failed:", error.message));
+      refreshIndex(nextRoots, nextRootModes).catch((error) => console.error("Background scan failed:", error.message));
     } else {
-      await saveIndex({ version: INDEX_VERSION, libraryRoot: "", libraryRoots: [], scannedAt: new Date().toISOString(), comics: [] });
+      await saveIndex({ version: INDEX_VERSION, libraryRoot: "", libraryRoots: [], rootModes: {}, rootSignatures: {}, scannedAt: new Date().toISOString(), comics: [] });
     }
-    sendJson(res, 200, { libraryRoots: nextRoots, libraryRoot: nextRoots[0] || "" });
+    sendJson(res, 200, { libraryRoots: nextRoots, libraryRoot: nextRoots[0] || "", rootModes: nextRootModes });
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/sync") {
-    const { libraryRoots } = await getConfig();
+    const body = await readRequestBody(req);
+    const { libraryRoots, rootModes } = await getConfig();
     if (!libraryRoots.length) {
-      sendJson(res, 200, { libraryRoots: [], comics: [], metadata: await getMetadata(), scanning: false });
+      sendJson(res, 200, { libraryRoots: [], rootModes: {}, comics: [], metadata: await getMetadata(), scanning: false });
+      return;
+    }
+    const requestedRoot = typeof body.root === "string" ? normalizeRoots([body.root])[0] : "";
+    const targetRoot = requestedRoot ? libraryRoots.find((root) => root === requestedRoot) : "";
+    if (requestedRoot && !targetRoot) {
+      sendError(res, 400, "Directory is not in library roots");
       return;
     }
     const cached = await loadIndex();
-    const cacheMatches = cached && rootsMatch(cached.libraryRoots || [cached.libraryRoot].filter(Boolean), libraryRoots);
-    const refresh = refreshIndex(libraryRoots);
+    const cacheMatches = cached && rootsMatch(cached.libraryRoots || [cached.libraryRoot].filter(Boolean), libraryRoots) && rootModesMatch(cached.rootModes || {}, rootModes, libraryRoots);
+    const refresh = targetRoot ? refreshRootIndex(targetRoot, libraryRoots, rootModes) : refreshIndex(libraryRoots, rootModes);
     if (cacheMatches) {
-      refresh.catch((error) => console.error("Background sync failed:", error.message));
+      refresh.catch((error) => console.error(targetRoot ? "Background root sync failed:" : "Background sync failed:", error.message));
       sendJson(res, 200, {
         libraryRoots,
         libraryRoot: libraryRoots[0] || "",
+        rootModes,
         comics: cached.comics.map(publicComic),
         metadata: await getMetadata(),
         scannedAt: cached.scannedAt,
-        scanning: true
+        scanning: true,
+        syncRoot: targetRoot || ""
       });
       return;
     }
@@ -816,10 +1019,12 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, {
       libraryRoots,
       libraryRoot: libraryRoots[0] || "",
+      rootModes,
       comics: index.comics.map(publicComic),
       metadata: await getMetadata(),
       scannedAt: index.scannedAt,
-      scanning: false
+      scanning: false,
+      syncRoot: targetRoot || ""
     });
     return;
   }
@@ -830,16 +1035,17 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/library") {
-    const { libraryRoots, libraryRoot, categoryCovers } = await getConfig();
+    const { libraryRoots, libraryRoot, rootModes, categoryCovers } = await getConfig();
     if (!libraryRoots.length) {
-      sendJson(res, 200, { libraryRoot: "", libraryRoots: [], categoryCovers, comics: [], metadata: await getMetadata(), scanning: false });
+      sendJson(res, 200, { libraryRoot: "", libraryRoots: [], rootModes: {}, categoryCovers, comics: [], metadata: await getMetadata(), scanning: false });
       return;
     }
     const refresh = url.searchParams.get("refresh") === "1";
-    const index = await getLibraryIndex(libraryRoots, { refresh });
+    const index = await getLibraryIndex(libraryRoots, { refresh, rootModes });
     sendJson(res, 200, {
       libraryRoot,
       libraryRoots,
+      rootModes,
       categoryCovers,
       comics: index.comics.map(publicComic),
       metadata: await getMetadata(),
@@ -851,12 +1057,12 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname.startsWith("/api/comics/")) {
     const id = decodeURIComponent(url.pathname.split("/")[3] || "");
-    const { libraryRoots } = await getConfig();
+    const { libraryRoots, rootModes } = await getConfig();
     if (!libraryRoots.length || !id) {
       sendError(res, 400, "Missing comic id");
       return;
     }
-    const comic = await findComic(libraryRoots, id);
+    const comic = await findComic(libraryRoots, id, rootModes);
     if (!comic) {
       sendError(res, 404, "Comic was not found");
       return;
@@ -876,7 +1082,7 @@ async function handleApi(req, res, url) {
       sendError(res, 400, "Missing comic id or page index");
       return;
     }
-    const index = await getLibraryIndex(config.libraryRoots);
+    const index = await getLibraryIndex(config.libraryRoots, { rootModes: config.rootModes });
     const comicIndex = index.comics.findIndex((item) => item.id === id);
     const comic = index.comics[comicIndex];
     if (!comic) {
@@ -940,7 +1146,7 @@ async function handleApi(req, res, url) {
       sendError(res, 400, "Missing comic id");
       return;
     }
-    const index = await getLibraryIndex(config.libraryRoots);
+    const index = await getLibraryIndex(config.libraryRoots, { rootModes: config.rootModes });
     const comicIndex = index.comics.findIndex((item) => item.id === id);
     const comic = index.comics[comicIndex];
     if (!comic) {
@@ -948,6 +1154,8 @@ async function handleApi(req, res, url) {
       return;
     }
     const libraryRoot = findRootById(config.libraryRoots, comic.rootId);
+    const rootName = path.basename(libraryRoot || "") || libraryRoot || "";
+    const rootMode = normalizeRootMode(config.rootModes[libraryRoot]);
     const sourceDir = path.resolve(libraryRoot || "", comic.relativeDir || ".");
     if (!libraryRoot || sourceDir === path.resolve(libraryRoot) || !isInside(libraryRoot, sourceDir)) {
       sendError(res, 403, "Refusing to move the library root");
@@ -961,7 +1169,7 @@ async function handleApi(req, res, url) {
 
     let categoryParts;
     try {
-      categoryParts = categoryPathParts(targetCategory);
+      categoryParts = stripCategoryRootParts(categoryPathParts(targetCategory), rootName, rootMode);
       assertSafePathParts(categoryParts);
     } catch (error) {
       sendError(res, 400, error.message);
@@ -997,7 +1205,7 @@ async function handleApi(req, res, url) {
     const updatedComic = {
       ...comic,
       id: nextId,
-      category: categoryForRelativeDir(nextRelativeDir),
+      category: categoryForScanRoot(nextRelativeDir, rootName, rootMode),
       relativeDir: nextRelativeDir,
       source: `${categoryForRelativeDir(nextRelativeDir)} · ${pages.length}P`,
       pages,
@@ -1022,7 +1230,7 @@ async function handleApi(req, res, url) {
       Object.entries(config.categoryCovers).map(([category, comicId]) => [category, comicId === comic.id ? nextId : comicId])
     );
     if (Object.values(config.categoryCovers).includes(comic.id)) {
-      await saveConfig(config.libraryRoots, categoryCovers);
+      await saveConfig(config.libraryRoots, categoryCovers, config.rootModes);
     }
     sendJson(res, 200, {
       moved: true,
@@ -1040,7 +1248,7 @@ async function handleApi(req, res, url) {
       sendError(res, 400, "Missing comic id");
       return;
     }
-    const index = await getLibraryIndex(config.libraryRoots);
+    const index = await getLibraryIndex(config.libraryRoots, { rootModes: config.rootModes });
     const comic = index.comics.find((item) => item.id === id);
     if (!comic) {
       sendError(res, 404, "Comic was not found");
@@ -1070,7 +1278,7 @@ async function handleApi(req, res, url) {
       Object.entries(config.categoryCovers).filter(([, comicId]) => comicId !== id)
     );
     if (Object.keys(categoryCovers).length !== Object.keys(config.categoryCovers).length) {
-      await saveConfig(config.libraryRoots, categoryCovers);
+      await saveConfig(config.libraryRoots, categoryCovers, config.rootModes);
     }
     sendJson(res, 200, { deleted: true, id });
     return;

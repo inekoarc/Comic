@@ -4,3 +4,4 @@ data/thumbs/
 node_modules/
 *.log
 data/library-index.json
+tools/ComicFolderPicker.exe

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="assets/favicon.ico?v=1" type="image/x-icon">
     <title>漫画管理器</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=20260730-2">
   </head>
   <body>
     <header class="site-header">
@@ -42,64 +42,37 @@
     </div>
 
     <main>
-      <section class="library-config" id="libraryConfig" hidden>
-        <div class="library-config-head">
+      <section class="library-config directory-manager" id="libraryConfig" hidden>
+        <div class="library-config-head directory-manager-head">
           <div>
-            <strong>漫画根目录</strong>
-            <span>管理本地收藏来源</span>
+            <strong>&#x76ee;&#x5f55;&#x7ba1;&#x7406;</strong>
+            <span id="rootCountLabel">0 &#x4e2a;&#x76ee;&#x5f55;</span>
           </div>
-          <button class="text-button library-config-close" id="settingsClose" type="button" aria-label="关闭设置">×</button>
+          <div class="directory-manager-actions">
+            <button class="secondary-button directory-action-button" id="syncLibraryButton" type="button">&#x540c;&#x6b65;&#x5237;&#x65b0;</button>
+            <button class="primary-button directory-action-button" type="submit" form="pathForm">&#x6dfb;&#x52a0;&#x76ee;&#x5f55;</button>
+          </div>
         </div>
-        <form class="path-form" id="pathForm">
+        <form class="path-form directory-add-form" id="pathForm">
           <label>
-            <span>漫画根目录</span>
-            <input id="libraryPath" type="text" placeholder="例如：D:\Comics">
+            <span>&#x6279;&#x91cf;&#x6dfb;&#x52a0;&#x76ee;&#x5f55;</span>
+            <input id="libraryPath" type="text" placeholder="&#x7559;&#x7a7a;&#x6253;&#x5f00;&#x9009;&#x62e9;&#x5668;&#xff0c;&#x6216;&#x7c98;&#x8d34;&#x591a;&#x4e2a;&#x8def;&#x5f84;&#xff1a;L:\Comic\&#x4e8c;&#x6e38;&#xff1b;L:\Comic\&#x7eaf;&#x7231;">
           </label>
-          <button class="primary-button" type="submit">添加目录</button>
-          <button class="secondary-button" id="syncLibraryButton" type="button">同步刷新</button>
         </form>
-        <div class="root-list" id="rootList"></div>
-        <p class="status-line" id="statusLine">正在连接本地服务...</p>
+        <div class="root-list directory-list" id="rootList"></div>
         <div class="sync-progress" id="syncProgress" hidden>
           <div class="sync-progress-heading">
-            <strong id="syncProgressLabel">准备同步</strong>
+            <strong id="syncProgressLabel">&#x51c6;&#x5907;&#x540c;&#x6b65;</strong>
             <span id="syncProgressValue">0%</span>
           </div>
           <progress id="syncProgressBar" max="100" value="0" aria-labelledby="syncProgressLabel"></progress>
-          <p id="syncProgressDetail">正在准备漫画目录...</p>
+          <p id="syncProgressDetail">&#x6b63;&#x5728;&#x51c6;&#x5907;&#x5206;&#x7c7b;&#x76ee;&#x5f55;...</p>
         </div>
       </section>
 
       <section class="page-view active" id="homeView">
-        <div class="portal-layout">
-          <section class="portal-main">
-            <div class="section-title">
-              <h1>最新收录</h1>
-              <a href="#library">更多</a>
-            </div>
-            <div class="update-list" id="latestList"></div>
-          </section>
-
-          <aside class="portal-side">
-            <div class="side-block">
-              <div class="section-title">
-                <h2>排行榜</h2>
-                <a href="#ranking">完整榜单</a>
-              </div>
-              <ol class="compact-ranking" id="homeRanking"></ol>
-            </div>
-
-            <div class="side-block">
-              <div class="section-title">
-                <h2>分类</h2>
-                <a href="#categories">全部</a>
-              </div>
-              <div class="tag-cloud" id="homeFolders"></div>
-            </div>
-          </aside>
-        </div>
+        <div class="home-recommendations" id="homeRecommendations"></div>
       </section>
-
       <section class="page-view" id="libraryView">
         <div class="section-title">
           <h1>漫画库</h1>
@@ -227,6 +200,6 @@
       </div>
     </main>
 
-    <script src="app.js?v=20260723-1"></script>
+    <script src="app.js?v=20260730-2"></script>
   </body>
 </html>
