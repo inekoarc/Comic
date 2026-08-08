@@ -217,6 +217,8 @@ const derivedCache = {
   tags: [],
   categoryVersion: -1,
   categoryOptions: [],
+  fullCollectionMapVersion: -1,
+  fullCollectionMap: new Map(),
   collectionVersion: -1,
   collectionSignature: "",
   collectionItems: [],
@@ -930,8 +932,10 @@ function imagePreview(src, width = 420) {
 function seriesTitleFor(comic) {
   const normalizeSeriesText = (value) => String(value || "")
     .normalize("NFKC")
+    .replace(/&#0*124;|&vert;|&VerticalLine;/giu, "|")
     .replace(/(?:\.|…|‥|⋯){2,}/gu, "……")
-    .replace(/[~～]/gu, "〜");
+    .replace(/[~～]/gu, "〜")
+    .replace(/_/gu, " ");
   const title = normalizeSeriesText(comic?.title).trim();
   if (!title) return "";
   const cleaned = title
@@ -948,15 +952,33 @@ function seriesTitleFor(comic) {
     }
     return text;
   };
-  const workTitle = stripTrailingBracketNotes(cleaned.replace(/^[【\[][^】\]]+[】\]]\s*/u, ""));
+  const stripLeadingBracketNotes = (value) => {
+    let text = String(value || "").trim();
+    for (let index = 0; index < 4; index += 1) {
+      const next = text.replace(/^[【\[][^】\]]+[】\]]\s*/u, "").trim();
+      if (next === text) break;
+      text = next;
+    }
+    return text;
+  };
+  const workTitle = stripTrailingBracketNotes(stripLeadingBracketNotes(cleaned));
   const normalizeBase = (value) => value
     .normalize("NFKC")
+    .replace(/&#0*124;|&vert;|&VerticalLine;/giu, "|")
     .replace(/(?:\.|…|‥|⋯){2,}/gu, "……")
     .replace(/[~～]/gu, "〜")
+    .replace(/_/gu, " ")
     .replace(/\s*[【\[][^\]】]{1,80}[】\]]\s*$/gu, "")
     .split(/[｜丨|]/u)[0]
+    .split(/\s[-–—]\s/u)[0]
     .split(/[〜]/u)[0]
     .replace(/\s*[【\[\(（]\s*\d{1,4}(?:\.\d+)?\s*[-–—~〜～]\s*\d{1,4}(?:\.\d+)?\s*[\]】\)）]\s*$/u, "")
+    .replace(/\s*(?:前日譚|前日谈)\s*$/iu, "")
+    .replace(/([話话])\s+([青月])$/u, "$1$2")
+    .replace(/^(.{2,30}?)\d{1,4}(?:\.\d+)?[。.].*$/u, "$1")
+    .replace(/^子作り実習科目$/u, "子作り実施科目")
+    .replace(/^(子作り実施科目|子作り実習科目)[。.\s].*$/u, "子作り実施科目")
+    .replace(/^(.{2,30}?。)\s*.{8,}$/u, "$1")
     .replace(/\s*[（(]\s*(?:オリジナル|original)\s*[）)]\s*$/iu, "")
     .replace(/\s*[（(][^()（）]*[\u4e00-\u9fff][^()（）]*[）)]\s*$/u, "")
     .replace(/\s*[（(][^()（）]*[）)]\s*$/u, "")
@@ -984,10 +1006,19 @@ function seriesTitleFor(comic) {
 function seriesAuthorKeyFor(comic) {
   const title = String(comic?.title || "")
     .normalize("NFKC")
+    .replace(/_/gu, " ")
     .trim();
-  const match = title.match(/^[【\[]\s*([^\]】]+?)\s*[】\]]/u);
-  if (!match) return "";
-  return match[1]
+  const authorText = (() => {
+    const first = title.match(/^[【\[]\s*([^\]】]+?)\s*[】\]]\s*/u);
+    if (!first) return "";
+    const rest = title.slice(first[0].length);
+    const second = rest.match(/^[【\[]\s*([^\]】]+?)\s*[】\]]/u);
+    return second && /^(?:上色版|フルカラー|full\s*color|カラー版|color)$/iu.test(first[1].trim())
+      ? second[1]
+      : first[1];
+  })();
+  if (!authorText) return "";
+  return authorText
     .replace(/\s+/g, " ")
     .replace(/\s*[（(][^()（）]+[）)]\s*$/u, "")
     .trim()
@@ -1092,9 +1123,29 @@ function collectionItemsFor(comics) {
   return items;
 }
 
+function fullCollectionsByKey() {
+  if (derivedCache.fullCollectionMapVersion === dataVersion) return derivedCache.fullCollectionMap;
+  const map = new Map();
+  buildCollectionItems(state.comics).forEach((item) => {
+    if (item.type === "collection") map.set(item.key, item);
+  });
+  derivedCache.fullCollectionMapVersion = dataVersion;
+  derivedCache.fullCollectionMap = map;
+  return map;
+}
+
+function hydrateCollectionItems(items) {
+  const fullCollections = fullCollectionsByKey();
+  return items.map((item) => (
+    item.type === "collection" && fullCollections.has(item.key)
+      ? fullCollections.get(item.key)
+      : item
+  ));
+}
+
 function getSelectedCollection() {
   if (!state.selectedCollectionKey) return null;
-  const collections = buildCollectionItems(state.comics).filter((item) => item.type === "collection");
+  const collections = [...fullCollectionsByKey().values()];
   const exact = collections.find((item) => item.key === state.selectedCollectionKey);
   if (exact) return exact;
 
@@ -1489,7 +1540,7 @@ function renderLibrary() {
     return;
   }
   const list = filteredComics();
-  let displayList = collectionItemsFor(list);
+  let displayList = hydrateCollectionItems(collectionItemsFor(list));
   const isTagResult = state.activeTag !== "全部";
   const isSearchResult = Boolean(state.search.trim());
   const isAllCategory = state.activeCategory === "全部";
@@ -1535,7 +1586,7 @@ function renderLibrary() {
     ? [...groupComicsByCategory(list).entries()]
       .sort(([a], [b]) => naturalSort(a, b))
       .map(([category, comics]) => {
-        const items = collectionItemsFor(comics).slice(0, CATEGORY_PREVIEW_SIZE);
+        const items = hydrateCollectionItems(collectionItemsFor(comics)).slice(0, CATEGORY_PREVIEW_SIZE);
         return [category, items, comics.length];
       })
     : [[state.activeCategory, pageDisplayList, list.length]];
