@@ -3,7 +3,7 @@ const fs = require("node:fs/promises");
 const http = require("node:http");
 const path = require("node:path");
 const { createReadStream } = require("node:fs");
-const { execFile } = require("node:child_process");
+const { execFile, spawn } = require("node:child_process");
 
 const PORT = Number(process.env.PORT || 9000);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -366,6 +366,8 @@ async function ensureFolderPicker() {
   const compileArgs = [
     "/nologo",
     "/target:winexe",
+    "/reference:System.Drawing.dll",
+    "/reference:System.Windows.Forms.dll",
     `/out:${FOLDER_PICKER_EXE}`
   ];
   if (await fs.stat(APP_ICON_FILE).catch(() => null)) compileArgs.push(`/win32icon:${APP_ICON_FILE}`);
@@ -393,6 +395,22 @@ async function selectDirectory(initialDir = "") {
   } finally {
     await fs.unlink(outputFile).catch(() => {});
   }
+}
+
+async function openFolderInExplorer(targetPath) {
+  if (process.platform !== "win32") {
+    throw new Error("Opening folders is only available on Windows");
+  }
+  const resolved = path.resolve(targetPath);
+  await fs.stat(resolved);
+  const args = ["/select,", resolved];
+  const child = spawn("explorer.exe", args, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false
+  });
+  child.unref();
+  return { path: resolved };
 }
 
 
@@ -1238,6 +1256,35 @@ async function handleApi(req, res, url) {
       comic: { ...publicComic(updatedComic), pages: updatedComic.pages },
       metadata
     });
+    return;
+  }
+
+  if (req.method === "POST" && /^\/api\/comics\/[^/]+\/open-folder$/.test(url.pathname)) {
+    const id = decodeURIComponent(url.pathname.split("/")[3] || "");
+    const config = await getConfig();
+    if (!config.libraryRoots.length || !id) {
+      sendError(res, 400, "Missing comic id");
+      return;
+    }
+    const index = await getLibraryIndex(config.libraryRoots, { rootModes: config.rootModes });
+    const comic = index.comics.find((item) => item.id === id);
+    if (!comic) {
+      sendError(res, 404, "Comic was not found");
+      return;
+    }
+    const libraryRoot = findRootById(config.libraryRoots, comic.rootId);
+    const comicDir = path.resolve(libraryRoot || "", comic.relativeDir || ".");
+    if (!libraryRoot || !isInside(libraryRoot, comicDir)) {
+      sendError(res, 403, "Refusing to open outside the library root");
+      return;
+    }
+    const stat = await fs.stat(comicDir).catch(() => null);
+    if (!stat?.isDirectory()) {
+      sendError(res, 404, "Comic folder was not found");
+      return;
+    }
+    const result = await openFolderInExplorer(comicDir);
+    sendJson(res, 200, { opened: true, path: result.path });
     return;
   }
 

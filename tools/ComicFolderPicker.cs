@@ -1,8 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using System.Windows.Forms;
 
 public static class ComicFolderPicker {
   [ComImport]
@@ -73,6 +77,30 @@ public static class ComicFolderPicker {
     out IShellItem ppv
   );
 
+  private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+  [DllImport("user32.dll")]
+  private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+  [DllImport("user32.dll")]
+  private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+  [DllImport("user32.dll")]
+  private static extern bool IsWindowVisible(IntPtr hWnd);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+  [DllImport("user32.dll")]
+  private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+  [DllImport("user32.dll")]
+  private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+  private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+  private const uint SWP_NOSIZE = 0x0001;
+  private const uint SWP_NOMOVE = 0x0002;
+  private const uint SWP_SHOWWINDOW = 0x0040;
   private const uint FOS_PICKFOLDERS = 0x00000020;
   private const uint FOS_FORCEFILESYSTEM = 0x00000040;
   private const uint FOS_ALLOWMULTISELECT = 0x00000200;
@@ -115,7 +143,11 @@ public static class ComicFolderPicker {
       } catch { }
     }
 
-    int hr = dialog.Show(IntPtr.Zero);
+    int hr;
+    using (Form owner = CreateHiddenOwnerWindow()) {
+      StartDialogTopMostWatcher(owner.Handle);
+      hr = dialog.Show(owner.Handle);
+    }
     if (hr == ERROR_CANCELLED) return new string[0];
     if (hr != 0) Marshal.ThrowExceptionForHR(hr);
 
@@ -134,5 +166,59 @@ public static class ComicFolderPicker {
       if (!String.IsNullOrWhiteSpace(selectedPath)) paths.Add(selectedPath);
     }
     return paths.ToArray();
+  }
+
+  private static Form CreateHiddenOwnerWindow() {
+    Form owner = new Form();
+    owner.ShowInTaskbar = false;
+    owner.FormBorderStyle = FormBorderStyle.None;
+    owner.StartPosition = FormStartPosition.Manual;
+    owner.Opacity = 0;
+    owner.Width = 1;
+    owner.Height = 1;
+    owner.Left = Screen.PrimaryScreen.WorkingArea.Left + (Screen.PrimaryScreen.WorkingArea.Width / 2);
+    owner.Top = Screen.PrimaryScreen.WorkingArea.Top + (Screen.PrimaryScreen.WorkingArea.Height / 2);
+    owner.TopMost = true;
+    Icon appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+    if (appIcon != null) owner.Icon = appIcon;
+    owner.Show();
+    return owner;
+  }
+
+  private static void StartDialogTopMostWatcher(IntPtr ownerHandle) {
+    Thread watcher = new Thread(() => {
+      DateTime deadline = DateTime.UtcNow.AddSeconds(8);
+      while (DateTime.UtcNow < deadline) {
+        IntPtr dialogHandle = FindDialogWindow(ownerHandle);
+        if (dialogHandle != IntPtr.Zero) {
+          SetWindowPos(dialogHandle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+          SetForegroundWindow(dialogHandle);
+          return;
+        }
+        Thread.Sleep(50);
+      }
+    });
+    watcher.IsBackground = true;
+    watcher.SetApartmentState(ApartmentState.STA);
+    watcher.Start();
+  }
+
+  private static IntPtr FindDialogWindow(IntPtr ownerHandle) {
+    IntPtr found = IntPtr.Zero;
+    uint currentProcessId = (uint)Process.GetCurrentProcess().Id;
+    EnumWindows((hwnd, lParam) => {
+      if (hwnd == ownerHandle || !IsWindowVisible(hwnd)) return true;
+      uint processId;
+      GetWindowThreadProcessId(hwnd, out processId);
+      if (processId != currentProcessId) return true;
+      StringBuilder className = new StringBuilder(256);
+      GetClassName(hwnd, className, className.Capacity);
+      if (className.ToString() == "#32770") {
+        found = hwnd;
+        return false;
+      }
+      return true;
+    }, IntPtr.Zero);
+    return found;
   }
 }

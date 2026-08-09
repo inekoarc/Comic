@@ -7,6 +7,7 @@ const CATEGORY_PREVIEW_SIZE = 10;
 const CATEGORY_PAGE_SIZE = 15;
 const RANKING_PAGE_SIZE = 50;
 const HOME_RECOMMENDATION_SIZE = 5;
+const HOME_LAYOUT_VERSION = 2;
 const READER_SCROLL_WINDOW = 8;
 const LIBRARY_VIEW_STORAGE_KEY = "comicLibraryView";
 const SELECTED_COMIC_STORAGE_KEY = "comicSelectedComic";
@@ -14,7 +15,7 @@ const SELECTED_COLLECTION_STORAGE_KEY = "comicSelectedCollection";
 const CATEGORY_COVERS_STORAGE_KEY = "comicCategoryCovers";
 const READER_KEY_SPEED_STORAGE_KEY = "comicReaderKeySpeed";
 const READING_PROGRESS_STORAGE_KEY = "comicReadingProgress";
-const HOME_SNAPSHOT_STORAGE_KEY = "comicHomeSnapshot";
+const HOME_SNAPSHOT_STORAGE_KEY = "comicHomeSnapshot:v2";
 const HOME_RANDOM_SEED = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
 
 function readSavedLibraryView() {
@@ -202,7 +203,9 @@ let readerKeyboardScrollDirection = 0;
 let readerKeyboardScrollLastTime = 0;
 let libraryPageBeforeSearch = state.libraryPage;
 let reloadLibraryAfterBackgroundSync = false;
+let homeRerollVersion = 0;
 let dataVersion = 0;
+const homeCategorySeeds = new Map();
 const derivedCache = {
   sortedVersion: -1,
   sortedComics: [],
@@ -1025,8 +1028,20 @@ function seriesAuthorKeyFor(comic) {
     .toLocaleLowerCase();
 }
 
+function canonicalSeriesTitle(title) {
+  const normalized = String(title || "")
+    .normalize("NFKC")
+    .replace(/(?:コ[○◯〇]?ティア|同人イベントの)出張編集部に行った日から妻の様子が/gu, "出張編集部に行った日から妻の様子が")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized.includes("出張編集部に行った日から妻の様子が")) {
+    return "出張編集部に行った日から妻の様子が";
+  }
+  return normalized;
+}
+
 function seriesKeyFor(comic) {
-  return `${seriesAuthorKeyFor(comic)}::${seriesTitleFor(comic)}`;
+  return `${seriesAuthorKeyFor(comic)}::${canonicalSeriesTitle(seriesTitleFor(comic))}`;
 }
 
 function chapterNumberFor(comic) {
@@ -1439,17 +1454,6 @@ function renderTags() {
 
 }
 
-function homeFeatureCard(comic) {
-  return `
-    <article class="home-feature-card" data-comic-id="${escapeHTML(comic.id)}">
-      <img src="${coverPreview(comic)}" alt="${escapeHTML(comic.title)} 封面" loading="lazy" decoding="async">
-      <h3 title="${escapeHTML(comic.title)}">${escapeHTML(comic.title)}</h3>
-      <p>${escapeHTML(comicMetaLine(comic))}</p>
-      <time datetime="${escapeHTML(comic.updatedAt || "")}">${escapeHTML(formatUpdatedAt(comic))}</time>
-    </article>
-  `;
-}
-
 function deterministicPick(list, count, seed) {
   return [...list]
     .map((comic) => ({ comic, weight: seededHash(`${seed}:${comic.id}`) }))
@@ -1468,21 +1472,42 @@ function seededHash(value) {
   return hash >>> 0;
 }
 
+function homeCategoryComics(category) {
+  return sortedComics().filter((comic) => {
+    const comicCategory = categoryParts(comic.category || comic.relativeDir || "\u672a\u5206\u7c7b")[0] || "\u672a\u5206\u7c7b";
+    return comicCategory === category;
+  });
+}
+
+function homeCategoryPicks(category) {
+  const categoryComics = homeCategoryComics(category);
+  const categorySeed = homeCategorySeeds.get(category) || "";
+  return deterministicPick(categoryComics, HOME_RECOMMENDATION_SIZE, `${HOME_RANDOM_SEED}:${category}:${categorySeed}`);
+}
+
+function renderHomeCategoryRow(category, row) {
+  row.innerHTML = homeCategoryPicks(category).map(comicCard).join("")
+    || emptyBlock("\u6682\u65e0\u63a8\u8350", "\u540c\u6b65\u6f2b\u753b\u76ee\u5f55\u540e\u8fd9\u91cc\u4f1a\u81ea\u52a8\u51fa\u73b0\u63a8\u8350\u3002");
+}
+
 function homeRecommendationSection(title, comics, options = {}) {
   const moreHref = options.category
     ? routeHash("library", { category: options.category, page: 1 })
     : routeHash("library", { page: 1 });
+  const action = options.category
+    ? `<button type="button" data-home-reroll-category="${escapeHTML(options.category)}">换一批</button>`
+    : `<a href="${moreHref}">更多&gt;&gt;</a>`;
   return `
-    <section class="home-row-section">
+    <section class="home-row-section"${options.category ? ` data-home-category="${escapeHTML(options.category)}"` : ""}>
       <div class="home-row-heading">
         <div>
           <h2>${escapeHTML(title)}</h2>
           ${options.subtitle ? `<span>${escapeHTML(options.subtitle)}</span>` : ""}
         </div>
-        <a href="${moreHref}">更多&gt;&gt;</a>
+        ${action}
       </div>
       <div class="home-feature-row">
-        ${comics.map(homeFeatureCard).join("") || emptyBlock("暂无推荐", "同步漫画目录后这里会自动出现推荐。")}
+        ${comics.map(comicCard).join("") || emptyBlock("暂无推荐", "同步漫画目录后这里会自动出现推荐。")}
       </div>
     </section>
   `;
@@ -1501,10 +1526,10 @@ function renderHome() {
     return;
   }
 
-  const cacheKey = `${dataVersion}:${HOME_RANDOM_SEED}`;
+  const cacheKey = `${dataVersion}:${HOME_RANDOM_SEED}:${HOME_LAYOUT_VERSION}:${homeRerollVersion}`;
   if (elements.homeRecommendations.dataset.homeCacheKey === cacheKey) return;
 
-  if (derivedCache.homeVersion !== dataVersion || derivedCache.homeSeed !== HOME_RANDOM_SEED) {
+  if (derivedCache.homeVersion !== dataVersion || derivedCache.homeSeed !== HOME_RANDOM_SEED || derivedCache.homeLayoutVersion !== HOME_LAYOUT_VERSION || derivedCache.homeRerollVersion !== homeRerollVersion) {
     const sorted = sortedComics();
     const sections = [homeRecommendationSection("最新", sorted.slice(0, HOME_RECOMMENDATION_SIZE), { subtitle: "更新" })];
     const groups = new Map();
@@ -1516,12 +1541,14 @@ function renderHome() {
     categoryFilterOptions().forEach((category) => {
       const categoryComics = groups.get(category) || [];
       if (!categoryComics.length) return;
-      const picks = deterministicPick(categoryComics, HOME_RECOMMENDATION_SIZE, `${HOME_RANDOM_SEED}:${category}`);
+      const picks = homeCategoryPicks(category);
       sections.push(homeRecommendationSection(category, picks, { category, subtitle: `${categoryComics.length} 本` }));
     });
     derivedCache.homeHtml = sections.join("") || emptyBlock("还没有漫画", "添加漫画根目录后点击同步刷新。");
     derivedCache.homeVersion = dataVersion;
     derivedCache.homeSeed = HOME_RANDOM_SEED;
+    derivedCache.homeLayoutVersion = HOME_LAYOUT_VERSION;
+    derivedCache.homeRerollVersion = homeRerollVersion;
     try {
       localStorage.setItem(HOME_SNAPSHOT_STORAGE_KEY, derivedCache.homeHtml);
     } catch {
@@ -1830,6 +1857,7 @@ function renderDetail() {
               <dd class="category-action-row">
                 <span>${escapeHTML(comic.category || "未分类")}</span>
                 <button class="secondary-button detail-move-button" type="button" data-open-move-comic popovertarget="readerMoveModal">移动</button>
+                <button class="secondary-button detail-open-button" type="button" data-open-comic-folder>打开</button>
                 <button class="secondary-button detail-delete-button" type="button" data-open-delete-comic popovertarget="readerDeleteModal">删除</button>
               </dd>
             </div>
@@ -2810,6 +2838,23 @@ document.addEventListener("submit", (event) => {
 
 
 document.addEventListener("click", (event) => {
+  const homeRerollButton = event.target.closest("[data-home-reroll-category]");
+  if (homeRerollButton) {
+    event.preventDefault();
+    const category = homeRerollButton.dataset.homeRerollCategory;
+    if (!category) return;
+    const section = homeRerollButton.closest("[data-home-category]");
+    const row = section?.querySelector(".home-feature-row");
+    if (!row) return;
+    const buttonTop = homeRerollButton.getBoundingClientRect().top;
+    homeCategorySeeds.set(category, `${Date.now()}:${Math.random().toString(36).slice(2)}`);
+    homeRerollVersion += 1;
+    renderHomeCategoryRow(category, row);
+    const nextButtonTop = homeRerollButton.getBoundingClientRect().top;
+    window.scrollBy(0, nextButtonTop - buttonTop);
+    return;
+  }
+
   const randomTarget = event.target.closest("[data-random-comic]");
   if (randomTarget) {
     if (!state.comics.length) return;
@@ -2856,10 +2901,19 @@ elements.comicDetail.addEventListener("click", async (event) => {
     const quickTagButton = event.target.closest("[data-quick-tag]");
     const openMoveComicButton = event.target.closest("[data-open-move-comic]");
     const openDeleteComicButton = event.target.closest("[data-open-delete-comic]");
+    const openComicFolderButton = event.target.closest("[data-open-comic-folder]");
 
     if (openDeleteComicButton) {
       event.preventDefault();
       openReaderModal(elements.readerDeleteModal);
+      return;
+    }
+    if (openComicFolderButton) {
+      event.preventDefault();
+      const comic = getSelectedComic();
+      if (!comic) return;
+      await api(`/api/comics/${encodeURIComponent(comic.id)}/open-folder`, { method: "POST" });
+      setStatus("已在文件管理器中打开漫画目录", "ok");
       return;
     }
     if (openMoveComicButton) {

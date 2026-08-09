@@ -712,11 +712,21 @@ body.dark .global-sync-progress {
   font-weight: 700;
 }
 
-.home-row-heading a {
+.home-row-heading a,
+.home-row-heading button {
   flex: 0 0 auto;
+  border: 0;
+  background: transparent;
   color: var(--text);
   font-size: 0.78rem;
   font-weight: 800;
+  cursor: pointer;
+  padding: 0;
+}
+
+.home-row-heading button:hover,
+.home-row-heading a:hover {
+  color: var(--accent);
 }
 
 .home-feature-row {
@@ -727,61 +737,6 @@ body.dark .global-sync-progress {
   padding: 2px 2px 12px;
 }
 
-.home-feature-card {
-  display: grid;
-  grid-template-rows: auto auto auto auto;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.home-feature-card:hover img {
-  transform: translateY(-2px);
-  box-shadow: 0 14px 24px rgba(74, 46, 36, 0.16);
-}
-
-.home-feature-card img {
-  width: 100%;
-  aspect-ratio: 4 / 5.35;
-  object-fit: contain;
-  border-radius: 3px;
-  background: var(--panel-soft);
-  box-shadow: 0 8px 18px rgba(74, 46, 36, 0.1);
-  transition: transform 0.16s ease, box-shadow 0.16s ease;
-}
-
-.home-feature-card h3,
-.home-feature-card p,
-.home-feature-card time {
-  overflow: hidden;
-  margin: 0;
-  text-overflow: ellipsis;
-}
-
-.home-feature-card h3 {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  min-height: 2.6em;
-  margin-top: 7px;
-  color: var(--text);
-  font-size: 0.82rem;
-  line-height: 1.3;
-  font-weight: 800;
-}
-
-.home-feature-card p,
-.home-feature-card time {
-  white-space: nowrap;
-  color: var(--muted);
-  font-size: 0.72rem;
-  line-height: 1.45;
-}
-
-.home-feature-card time {
-  margin-top: 2px;
-}
 .ranking-tabs {
   display: inline-flex;
   gap: 4px;
@@ -1840,6 +1795,7 @@ body.dark .detail-title-bar {
 }
 
 .detail-move-button,
+.detail-open-button,
 .detail-delete-button {
   min-height: 30px;
   padding: 4px 14px;
@@ -3276,20 +3232,4 @@ body.dark .page-thumb h3 {
     padding-bottom: 10px;
   }
 
-  .home-feature-card {
-    grid-template-rows: auto auto auto auto;
-  }
-
-  .home-feature-card img {
-    aspect-ratio: 4 / 5.35;
-  }
-
-  .home-feature-card h3 {
-    font-size: 0.76rem;
-  }
-
-  .home-feature-card p,
-  .home-feature-card time {
-    font-size: 0.68rem;
-  }
 }
