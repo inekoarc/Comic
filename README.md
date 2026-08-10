@@ -2,13 +2,28 @@
 
 一个本地漫画库管理和阅读工具。服务端扫描本机漫画文件夹，前端提供首页、漫画库、排行榜、分类、详情页、合集页和阅读器。评分、标签、观看次数、简介、分类封面等用户数据会保存到项目内的 `data/metadata.json` 和 `data/config.json`。
 
-## 启动
+## 复刻与启动
+
+### 环境要求
+
+- [Node.js](https://nodejs.org/)（推荐 18 或以上版本）
+- Windows 用户如需使用"添加目录"文件选择器，需安装 .NET Framework 4.x（Windows 10/11 已自带）
+
+### 复刻步骤
 
 ```bash
+# 1. 克隆仓库
+git clone https://github.com/inekoarc/Comic.git
+cd Comic
+
+# 2. 安装依赖（当前版本无外部依赖，此步可跳过）
+npm install
+
+# 3. 启动服务
 npm start
 ```
 
-然后打开：
+然后打开浏览器访问：
 
 ```text
 http://127.0.0.1:9000
@@ -16,13 +31,21 @@ http://127.0.0.1:9000
 
 Windows 下也可以双击 `ComicLauncher.exe` 启动，详见 [LAUNCHER.md](LAUNCHER.md)。
 
+### 常见问题
+
 如果提示 `EADDRINUSE: address already in use 127.0.0.1:9000`，说明 9000 端口已经有一个漫画管理器或其他程序在运行。关闭旧进程后重新启动即可。
 
 如果部署到服务器并希望从局域网/公网访问，可设置监听地址：
 
 ```powershell
+# Windows PowerShell
 $env:HOST="0.0.0.0"
 npm start
+```
+
+```bash
+# Linux / macOS
+HOST=0.0.0.0 npm start
 ```
 
 ## 漫画目录结构
@@ -77,4 +100,5 @@ npm start
 - `app.js`：前端状态、交互和渲染逻辑。
 - `server.js`：本地 API、静态服务、目录扫描和文件操作。
 - `tools/ComicLauncher.cs`：Windows 启动器源码。
+- `tools/ComicFolderPicker.cs`：Windows 文件夹选择器源码（`/target:winexe`，无任务栏图标）。
 - `build-launcher.ps1`：重新构建启动器的脚本。
