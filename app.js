@@ -415,8 +415,8 @@ function directoryItemAddedTime(item) {
 
 function formatUpdatedAt(comic) {
   const timestamp = comicUpdatedTime(comic);
-  if (!timestamp) return "更新：未知";
-  return `更新：${new Intl.DateTimeFormat("zh-CN", {
+  if (!timestamp) return "未知";
+  return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
@@ -1323,7 +1323,7 @@ function comicCard(comic) {
     <article class="directory-card" data-comic-id="${escapeHTML(comic.id)}">
       <img src="${coverPreview(comic)}" alt="${escapeHTML(comic.title)} 灏侀潰" loading="lazy" decoding="async">
       <h3 title="${escapeHTML(comic.title)}">${escapeHTML(comic.title)}</h3>
-      <time class="directory-card-footer" datetime="${escapeHTML(comic.updatedAt || "")}"><span>${escapeHTML(formatUpdatedAt(comic))}</span><span>${escapeHTML(comic.pageCount)} 页</span></time>
+      <time class="directory-card-footer" datetime="${escapeHTML(comic.updatedAt || "")}"><span>${escapeHTML(comic.pageCount)} 页</span><span>${escapeHTML(formatUpdatedAt(comic))}</span></time>
     </article>
   `;
 }
@@ -1336,7 +1336,7 @@ function collectionCard(collection) {
       <span class="collection-badge">${collection.comics.length}期</span>
       <img src="${coverPreview(lead)}" alt="${escapeHTML(collection.title)} 合集封面" loading="lazy" decoding="async">
       <h3 title="${escapeHTML(collection.title)}">${escapeHTML(collection.title)}</h3>
-      <time class="directory-card-footer" datetime="${escapeHTML(lead.updatedAt || "")}"><span>${escapeHTML(formatUpdatedAt(lead))}</span><span>${totalPages} 页</span></time>
+      <time class="directory-card-footer" datetime="${escapeHTML(lead.updatedAt || "")}"><span>${totalPages} 页</span><span>${escapeHTML(formatUpdatedAt(lead))}</span></time>
     </article>
   `;
 }
