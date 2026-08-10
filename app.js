@@ -114,8 +114,7 @@ const state = {
 const $ = (selector) => document.querySelector(selector);
 
 const elements = {
-  pathForm: $("#pathForm"),
-  libraryPath: $("#libraryPath"),
+  addDirectoryButton: $("#addDirectoryButton"),
   rootList: $("#rootList"),
   rootCountLabel: $("#rootCountLabel"),
   syncLibraryButton: $("#syncLibraryButton"),
@@ -728,8 +727,7 @@ function stopBackgroundProgressPolling() {
 
 function setSyncControlsDisabled(disabled) {
   if (elements.syncLibraryButton) elements.syncLibraryButton.disabled = disabled;
-  const addDirectoryButton = elements.pathForm?.querySelector('button[type="submit"]') || document.querySelector('button[form="pathForm"][type="submit"]');
-  if (addDirectoryButton) addDirectoryButton.disabled = disabled;
+  if (elements.addDirectoryButton) elements.addDirectoryButton.disabled = disabled;
   elements.rootList?.querySelectorAll("button").forEach((button) => {
     button.disabled = disabled;
   });
@@ -2441,7 +2439,6 @@ async function loadLibrary({ refresh = false, preserveScroll = false } = {}) {
     await persistCategoryCovers();
   }
   invalidateDerivedCache();
-  elements.libraryPath.value = "";
   if (state.activeTag !== "全部" && !allTags().includes(state.activeTag)) state.activeTag = "全部";
   if (state.activeCategory !== "全部" && !categoryPathOptions().includes(state.activeCategory)) state.activeCategory = "全部";
   persistLibraryView();
@@ -2464,15 +2461,7 @@ async function loadLibrary({ refresh = false, preserveScroll = false } = {}) {
   }
 }
 
-function parseLibraryPaths(value) {
-  return [...new Set(String(value || "")
-    .split(/[\r\n;,\uFF0C\uFF1B]+/)
-    .map((item) => item.trim())
-    .filter(Boolean))];
-}
-
-async function scanPath(pathValue) {
-  const libraryRoots = parseLibraryPaths(pathValue);
+async function addLibraryRoots(libraryRoots) {
   if (!libraryRoots.length) {
     setStatus("\u8bf7\u8f93\u5165\u5206\u7c7b\u76ee\u5f55\u3002", "error");
     return;
@@ -2500,15 +2489,14 @@ async function scanPath(pathValue) {
 
 async function selectDirectoryAndScan() {
   setStatus("\u6b63\u5728\u6253\u5f00\u76ee\u5f55\u9009\u62e9\u5668...");
-  const initial = parseLibraryPaths(elements.libraryPath.value)[0] || state.libraryRoot || "";
+  const initial = state.libraryRoot || "";
   const selected = await api(`/api/select-directory?initial=${encodeURIComponent(initial)}`, { timeoutMs: 120000 });
   const selectedPaths = Array.isArray(selected.paths) ? selected.paths : [selected.path].filter(Boolean);
   if (selected.canceled || !selectedPaths.length) {
     setStatus("\u5df2\u53d6\u6d88\u9009\u62e9\u76ee\u5f55\u3002");
     return;
   }
-  elements.libraryPath.value = selectedPaths.join("; ");
-  await scanPath(selectedPaths.join("; "));
+  await addLibraryRoots(selectedPaths);
 }
 
 
@@ -2662,15 +2650,9 @@ async function removeTag(tag) {
   renderDetail();
 }
 
-elements.pathForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
+if (elements.addDirectoryButton) elements.addDirectoryButton.addEventListener("click", async () => {
   try {
-    const typedPath = elements.libraryPath.value.trim();
-    if (typedPath) {
-      await scanPath(typedPath);
-    } else {
-      await selectDirectoryAndScan();
-    }
+    await selectDirectoryAndScan();
   } catch (error) {
     setStatus(friendlyError(error), "error");
   }
