@@ -1013,7 +1013,7 @@ body.dark .global-sync-progress {
 .library-category-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 18px;
+  gap: 28px 22px;
 }
 
 .library-category-grid-paged {
@@ -1022,35 +1022,37 @@ body.dark .global-sync-progress {
 
 .tag-result-group {
   display: grid;
+  grid-column: 1 / -1;
   gap: 14px;
 }
 
 .tag-result-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 18px;
+  gap: 28px 22px;
 }
 
 .directory-card,
 .empty-card {
-  border: 1px solid rgba(112, 82, 72, 0.14);
-  background: var(--panel);
-  padding: 10px;
+  border: 0;
+  background: transparent;
+  padding: 0;
   border-radius: var(--radius);
-  box-shadow: var(--shadow-card);
+  box-shadow: none;
   transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .directory-card {
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(2.7em, auto) minmax(3.1em, auto) auto;
+  grid-template-rows: auto minmax(2.7em, auto) auto;
   align-content: start;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
 }
 
 .collection-card {
-  border-color: rgba(191, 31, 52, 0.28);
-  background: linear-gradient(180deg, rgba(191, 31, 52, 0.05), var(--panel) 42%);
+  background: transparent;
 }
 
 .collection-badge {
@@ -1080,55 +1082,53 @@ body.dark .global-sync-progress {
   aspect-ratio: 4 / 5.35;
   object-fit: cover;
   margin-bottom: 10px;
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--panel-soft);
+  box-shadow: 0 8px 20px rgba(74, 46, 36, 0.12);
 }
 
 .directory-card:hover {
-  box-shadow: 0 18px 34px rgba(74, 46, 36, 0.14);
+  transform: translateY(-2px);
+}
+
+.directory-card:hover img {
+  box-shadow: 0 14px 28px rgba(74, 46, 36, 0.18);
 }
 
 .directory-card h3,
-.directory-card p,
 .directory-card time {
   margin: 0;
 }
 
 .directory-card h3 {
-  min-height: 2.75em;
-  font-size: 0.96rem;
+  font-size: 0.88rem;
+  font-weight: 400;
   line-height: 1.35;
   overflow: hidden;
   overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
 }
 
-.directory-card p,
 .empty-card p {
   margin-top: 6px;
   color: var(--muted);
   line-height: 1.55;
 }
 
-.directory-card p {
-  font-size: 0.9rem;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
 .directory-card time {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   align-self: end;
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid rgba(112, 82, 72, 0.12);
+  margin-top: 7px;
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.35;
+}
+
+.directory-card time span:last-child {
+  flex: 0 0 auto;
+  color: var(--muted);
 }
 
 .library-pager {
@@ -2979,12 +2979,20 @@ body.dark .page-thumb h3 {
   }
 
   .tag-result-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .library-category-grid-paged {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 24px 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  .library-category-grid,
+  .tag-result-grid,
+  .library-category-grid-paged {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -3017,19 +3025,14 @@ body.dark .page-thumb h3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .tag-result-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
-  }
-
+  .tag-result-grid,
   .library-category-grid-paged {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
+    gap: 22px 12px;
   }
 
   .library-category-grid-paged .directory-card,
   .tag-result-grid .directory-card {
-    padding: 6px;
+    padding: 0 0 12px 0;
   }
 
   .library-category-grid-paged .directory-card img,
@@ -3040,13 +3043,11 @@ body.dark .page-thumb h3 {
 
   .library-category-grid-paged .directory-card h3,
   .tag-result-grid .directory-card h3 {
-    font-size: 0.76rem;
+    font-size: 0.72rem;
     line-height: 1.25;
   }
 
-  .library-category-grid-paged .directory-card p,
   .library-category-grid-paged .directory-card time,
-  .tag-result-grid .directory-card p,
   .tag-result-grid .directory-card time {
     font-size: 0.7rem;
   }
@@ -3117,6 +3118,14 @@ body.dark .page-thumb h3 {
   .reader-pill {
     min-height: 32px;
     padding-inline: 10px;
+  }
+}
+
+@media (max-width: 430px) {
+  .library-category-grid,
+  .tag-result-grid,
+  .library-category-grid-paged {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -3227,9 +3236,15 @@ body.dark .page-thumb h3 {
   }
 
   .home-feature-row {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
     padding-bottom: 10px;
   }
 
+}
+
+@media (max-width: 420px) {
+  .home-feature-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
