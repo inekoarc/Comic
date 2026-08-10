@@ -258,8 +258,8 @@ h3 {
   right: auto;
   z-index: 35;
   display: grid;
-  width: min(580px, calc(100vw - 28px));
-  max-height: calc(100vh - 86px);
+  width: min(450px, calc(100vw - 28px));
+  max-height: calc(100vh - 60px);
   gap: 12px;
   overflow: auto;
   padding: 16px;
@@ -2973,8 +2973,8 @@ body.dark .page-thumb h3 {
   .library-config {
     top: 120px;
     right: 12px;
-    width: min(580px, calc(100vw - 24px));
-    max-height: calc(100vh - 136px);
+    width: min(450px, calc(100vw - 24px));
+    max-height: calc(100vh - 110px);
   }
 
   .portal-main,
@@ -3017,7 +3017,7 @@ body.dark .page-thumb h3 {
     right: 12px;
     left: 8px;
     width: auto;
-    max-height: calc(100vh - 148px);
+    max-height: calc(100vh - 120px);
     padding: 12px;
   }
 
