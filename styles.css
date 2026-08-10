@@ -942,6 +942,13 @@ body.dark .global-sync-progress {
   border-bottom: 1px solid var(--line);
 }
 
+.library-row-divider {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+  margin: 0;
+  height: 0;
+}
+
 .library-category-heading h2 {
   margin: 0;
   color: var(--accent);
@@ -1047,8 +1054,6 @@ body.dark .global-sync-progress {
   display: grid;
   grid-template-rows: auto minmax(2.7em, auto) auto;
   align-content: start;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 14px;
 }
 
 .collection-card {
@@ -3032,7 +3037,7 @@ body.dark .page-thumb h3 {
 
   .library-category-grid-paged .directory-card,
   .tag-result-grid .directory-card {
-    padding: 0 0 12px 0;
+    padding: 0;
   }
 
   .library-category-grid-paged .directory-card img,

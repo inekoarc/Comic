@@ -1034,10 +1034,82 @@ function canonicalSeriesTitle(title) {
     .replace(/(?:コ[○◯〇]?ティア|同人イベントの)出張編集部に行った日から妻の様子が/gu, "出張編集部に行った日から妻の様子が")
     .replace(/\s+/g, " ")
     .trim();
+  if (normalized.includes("催眠にかかって")) {
+    return "催眠にかかって";
+  }
+  if (normalized.includes("友達のママが僕のデカチンでイキまくった")) {
+    return "友達のママが僕のデカチンでイキまくった";
+  }
   if (normalized.includes("出張編集部に行った日から妻の様子が")) {
     return "出張編集部に行った日から妻の様子が";
   }
   return normalized;
+}
+
+function trimSharedSeriesPrefix(prefix) {
+  return String(prefix || "")
+    .replace(/[\s·・、。，．,:：;；+＋\-ー－~～|｜/\\_[\]【】()（）（）「」『』]+$/u, "")
+    .trim();
+}
+
+function sharedSeriesPrefix(a, b) {
+  const aChars = [...String(a || "")];
+  const bChars = [...String(b || "")];
+  const max = Math.min(aChars.length, bChars.length);
+  let index = 0;
+  while (index < max && aChars[index] === bChars[index]) index += 1;
+  return trimSharedSeriesPrefix(aChars.slice(0, index).join(""));
+}
+
+function isMeaningfulSeriesPrefix(prefix) {
+  const length = [...String(prefix || "")].length;
+  return length >= 12;
+}
+
+function adaptiveSeriesKeysFor(comics) {
+  const byAuthor = new Map();
+  comics.forEach((comic) => {
+    const author = seriesAuthorKeyFor(comic);
+    if (!author) return;
+    const title = canonicalSeriesTitle(seriesTitleFor(comic));
+    if (!title) return;
+    if (!byAuthor.has(author)) byAuthor.set(author, []);
+    byAuthor.get(author).push({ comic, title });
+  });
+
+  const keys = new Map();
+  byAuthor.forEach((items, author) => {
+    if (items.length < 2) return;
+    const buckets = new Map();
+    items.forEach((item) => {
+      const bucketKey = [...item.title].slice(0, 8).join("");
+      if (!buckets.has(bucketKey)) buckets.set(bucketKey, []);
+      buckets.get(bucketKey).push(item);
+    });
+
+    const candidates = new Map();
+    buckets.forEach((bucket) => {
+      for (let i = 0; i < bucket.length; i += 1) {
+        for (let j = i + 1; j < bucket.length; j += 1) {
+          const prefix = sharedSeriesPrefix(bucket[i].title, bucket[j].title);
+          if (!isMeaningfulSeriesPrefix(prefix)) continue;
+          if (!candidates.has(prefix)) candidates.set(prefix, new Set());
+          candidates.get(prefix).add(bucket[i].comic.id);
+          candidates.get(prefix).add(bucket[j].comic.id);
+        }
+      }
+    });
+
+    [...candidates.entries()]
+      .filter(([, ids]) => ids.size >= 2)
+      .sort((a, b) => [...b[0]].length - [...a[0]].length)
+      .forEach(([prefix, ids]) => {
+        ids.forEach((id) => {
+          if (!keys.has(id)) keys.set(id, `${author}::${prefix}`);
+        });
+      });
+  });
+  return keys;
 }
 
 function seriesKeyFor(comic) {
@@ -1069,6 +1141,7 @@ function collectionKeyFor(category, title) {
 function buildCollectionItems(comics) {
   const groups = new Map();
   const folderGroups = new Map();
+  const adaptiveSeriesKeys = adaptiveSeriesKeysFor(comics);
 
   comics.forEach((comic) => {
     const parts = categoryParts(comic.category || "未分类");
@@ -1081,7 +1154,7 @@ function buildCollectionItems(comics) {
     const category = comic.category || "未分类";
     const parts = categoryParts(category);
     const seriesTitle = seriesTitleFor(comic);
-    const seriesKey = seriesKeyFor(comic);
+    const seriesKey = adaptiveSeriesKeys.get(comic.id) || seriesKeyFor(comic);
     const matchingFolderCategory = parts.length === 1
       ? folderGroups.get(collectionKeyFor(parts[0], comic.title))
       : "";
@@ -1250,8 +1323,7 @@ function comicCard(comic) {
     <article class="directory-card" data-comic-id="${escapeHTML(comic.id)}">
       <img src="${coverPreview(comic)}" alt="${escapeHTML(comic.title)} 灏侀潰" loading="lazy" decoding="async">
       <h3 title="${escapeHTML(comic.title)}">${escapeHTML(comic.title)}</h3>
-      <p>${escapeHTML(comicMetaLine(comic))}</p>
-      <time datetime="${escapeHTML(comic.updatedAt || "")}">${escapeHTML(formatUpdatedAt(comic))}</time>
+      <time class="directory-card-footer" datetime="${escapeHTML(comic.updatedAt || "")}"><span>${escapeHTML(formatUpdatedAt(comic))}</span><span>${escapeHTML(comic.pageCount)} 页</span></time>
     </article>
   `;
 }
@@ -1264,8 +1336,7 @@ function collectionCard(collection) {
       <span class="collection-badge">${collection.comics.length}期</span>
       <img src="${coverPreview(lead)}" alt="${escapeHTML(collection.title)} 合集封面" loading="lazy" decoding="async">
       <h3 title="${escapeHTML(collection.title)}">${escapeHTML(collection.title)}</h3>
-      <p>${escapeHTML(collection.category)} · ${totalPages} 页 · 最新：${escapeHTML(lead.title)}</p>
-      <time datetime="${escapeHTML(lead.updatedAt || "")}">${escapeHTML(formatUpdatedAt(lead))}</time>
+      <time class="directory-card-footer" datetime="${escapeHTML(lead.updatedAt || "")}"><span>${escapeHTML(formatUpdatedAt(lead))}</span><span>${totalPages} 页</span></time>
     </article>
   `;
 }
@@ -1598,7 +1669,11 @@ function renderLibrary() {
           </div>
         </div>
         <div class="tag-result-grid">
-          ${pageDisplayList.map(directoryItemCard).join("")}
+          ${pageDisplayList.map((item, i) => {
+            const card = directoryItemCard(item);
+            if ((i + 1) % 5 === 0 && i + 1 < pageDisplayList.length) return card + '<div class="library-row-divider"></div>';
+            return card;
+          }).join("")}
         </div>
       </section>
     ` : emptyBlock("没有匹配结果", "换个关键词、标签或分类试试。");
@@ -1629,7 +1704,11 @@ function renderLibrary() {
         </div>
       </div>
       <div class="library-category-grid ${isAllCategory ? "" : "library-category-grid-paged"}">
-        ${items.map(directoryItemCard).join("")}
+        ${items.map((item, i) => {
+          const card = directoryItemCard(item);
+          if ((i + 1) % 5 === 0 && i + 1 < items.length) return card + '<div class="library-row-divider"></div>';
+          return card;
+        }).join("")}
       </div>
     </section>
   `).join("") || emptyBlock("没有匹配结果", "换个关键词、标签或分类试试。");
