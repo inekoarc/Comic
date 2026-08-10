@@ -258,7 +258,7 @@ h3 {
   right: auto;
   z-index: 35;
   display: grid;
-  width: min(520px, calc(100vw - 28px));
+  width: min(580px, calc(100vw - 28px));
   max-height: calc(100vh - 86px);
   gap: 12px;
   overflow: auto;
@@ -2973,7 +2973,7 @@ body.dark .page-thumb h3 {
   .library-config {
     top: 120px;
     right: 12px;
-    width: min(520px, calc(100vw - 24px));
+    width: min(580px, calc(100vw - 24px));
     max-height: calc(100vh - 136px);
   }
 
@@ -3139,7 +3139,7 @@ body.dark .page-thumb h3 {
 
 
 .directory-manager {
-  width: min(520px, calc(100vw - 28px));
+  width: min(580px, calc(100vw - 28px));
   gap: 12px;
 }
 
@@ -3159,11 +3159,6 @@ body.dark .page-thumb h3 {
   min-height: 36px;
   padding-inline: 14px;
   white-space: nowrap;
-}
-
-.directory-add-form {
-  grid-template-columns: 1fr;
-  gap: 8px;
 }
 
 .directory-list {
