@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="assets/favicon.ico?v=1" type="image/x-icon">
     <title>Comic</title>
-    <link rel="stylesheet" href="styles.css?v=20260730-2">
+    <link rel="stylesheet" href="styles.css?v=20260811">
   </head>
   <body>
     <header class="site-header">
@@ -49,15 +49,9 @@
           </div>
           <div class="directory-manager-actions">
             <button class="secondary-button directory-action-button" id="syncLibraryButton" type="button">&#x540c;&#x6b65;&#x5237;&#x65b0;</button>
-            <button class="primary-button directory-action-button" type="submit" form="pathForm">&#x6dfb;&#x52a0;&#x76ee;&#x5f55;</button>
+            <button class="primary-button directory-action-button" id="addDirectoryButton" type="button">&#x6dfb;&#x52a0;&#x76ee;&#x5f55;</button>
           </div>
         </div>
-        <form class="path-form directory-add-form" id="pathForm">
-          <label>
-            <span>&#x6279;&#x91cf;&#x6dfb;&#x52a0;&#x76ee;&#x5f55;</span>
-            <input id="libraryPath" type="text" placeholder="&#x7559;&#x7a7a;&#x6253;&#x5f00;&#x9009;&#x62e9;&#x5668;&#xff0c;&#x6216;&#x7c98;&#x8d34;&#x591a;&#x4e2a;&#x8def;&#x5f84;&#xff1a;L:\Comic\&#x4e8c;&#x6e38;&#xff1b;L:\Comic\&#x7eaf;&#x7231;">
-          </label>
-        </form>
         <div class="root-list directory-list" id="rootList"></div>
         <div class="sync-progress" id="syncProgress" hidden>
           <div class="sync-progress-heading">
@@ -199,6 +193,6 @@
       </div>
     </main>
 
-    <script src="app.js?v=20260730-2"></script>
+    <script src="app.js?v=20260811"></script>
   </body>
 </html>
