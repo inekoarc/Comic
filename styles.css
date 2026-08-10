@@ -1020,7 +1020,7 @@ body.dark .global-sync-progress {
 .library-category-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px 22px;
+  gap: 10px 22px;
 }
 
 .library-category-grid-paged {
@@ -1036,7 +1036,7 @@ body.dark .global-sync-progress {
 .tag-result-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px 22px;
+  gap: 10px 22px;
 }
 
 .directory-card,
@@ -1111,6 +1111,9 @@ body.dark .global-sync-progress {
   line-height: 1.35;
   overflow: hidden;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .empty-card p {
@@ -2989,7 +2992,7 @@ body.dark .page-thumb h3 {
 
   .library-category-grid-paged {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px 16px;
+    gap: 10px 16px;
   }
 }
 
@@ -3032,7 +3035,7 @@ body.dark .page-thumb h3 {
 
   .tag-result-grid,
   .library-category-grid-paged {
-    gap: 8px 12px;
+    gap: 10px 12px;
   }
 
   .library-category-grid-paged .directory-card,
