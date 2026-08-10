@@ -1407,7 +1407,12 @@ async function serveStatic(req, res, url) {
     return;
   }
 
-  res.writeHead(200, { "content-type": mimeTypes[path.extname(filePath).toLowerCase()] || "application/octet-stream" });
+  const ext = path.extname(filePath).toLowerCase();
+  const headers = { "content-type": mimeTypes[ext] || "application/octet-stream" };
+  if (ext === ".html" || ext === ".css" || ext === ".js") {
+    headers["cache-control"] = "no-cache";
+  }
+  res.writeHead(200, headers);
   createReadStream(filePath).pipe(res);
 }
 
