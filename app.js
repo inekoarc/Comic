@@ -420,7 +420,7 @@ function formatUpdatedAt(comic) {
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
-  }).format(new Date(timestamp)).replace(/\//g, "-")}`;
+  }).format(new Date(timestamp)).replace(/\//g, "-");
 }
 
 function sortedComics() {
