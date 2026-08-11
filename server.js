@@ -277,6 +277,11 @@ function isImage(filePath) {
   return imageExtensions.has(path.extname(filePath).toLowerCase());
 }
 
+async function hasChildDirectories(dir) {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  return entries.some((entry) => entry.isDirectory());
+}
+
 function naturalSort(a, b) {
   return a.localeCompare(b, "zh-CN", { numeric: true, sensitivity: "base" });
 }
@@ -1093,6 +1098,10 @@ async function handleApi(req, res, url) {
     ? url.pathname.match(/^\/api\/comics\/([^/]+)\/pages\/(\d+)$/)
     : null;
   if (pageDeleteMatch) {
+    if (scanPromise) {
+      sendError(res, 409, "同步扫描中，请稍后再删除漫画页");
+      return;
+    }
     const id = decodeURIComponent(pageDeleteMatch[1]);
     const pageIndex = Number(pageDeleteMatch[2]);
     const config = await getConfig();
@@ -1289,6 +1298,10 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "DELETE" && /^\/api\/comics\/[^/]+$/.test(url.pathname)) {
+    if (scanPromise) {
+      sendError(res, 409, "同步扫描中，请稍后再删除漫画");
+      return;
+    }
     const id = decodeURIComponent(url.pathname.split("/")[3] || "");
     const config = await getConfig();
     if (!config.libraryRoots.length || !id) {
@@ -1310,6 +1323,10 @@ async function handleApi(req, res, url) {
     const stat = await fs.stat(comicDir).catch(() => null);
     if (!stat?.isDirectory()) {
       sendError(res, 404, "Comic folder was not found");
+      return;
+    }
+    if (await hasChildDirectories(comicDir)) {
+      sendError(res, 409, "Refusing to delete a comic folder that contains subfolders");
       return;
     }
     await fs.rm(comicDir, { recursive: true, force: false });
